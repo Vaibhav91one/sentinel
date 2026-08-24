@@ -50,7 +50,20 @@ async function runTurn(input) {
         if (!text && Array.isArray(msg.content)) {
           text = msg.content.map((c) => (typeof c === "string" ? c : c.text ?? c.content)).filter(Boolean).join("\n");
         }
-        if (text.trim()) console.log("--- final ---\n" + text);
+        if (text.trim()) {
+          console.log("--- final ---\n" + text);
+        } else {
+          // content shape varies across versions; fetch the newest model.message from the events API
+          try {
+            const res = await fetch(`${process.env.TRUEFORGE_BASE_URL ?? "http://localhost:8790"}/api/v1/sessions/${session.id}/events`);
+            const d = await res.json();
+            const evs = d.data ?? [];
+            const last = evs.find((e) => e.event?.type === "model.message");
+            const c = last?.event?.content;
+            const t2 = typeof c === "string" ? c : Array.isArray(c) ? c.map((x) => (typeof x === "string" ? x : x.text)).filter(Boolean).join("\n") : "";
+            if (t2.trim()) console.log("--- final ---\n" + t2);
+          } catch { /* best effort */ }
+        }
         break;
       }
       default:
@@ -60,7 +73,7 @@ async function runTurn(input) {
 }
 
 await runTurn([{ type: "user.message", content:
-  `Assess ${TARGET} end to end. It is NOT in the default scope yet: first authorize it via scope_add (expect a human approval gate), then scope_check it, passive fingerprint, request approval for active port sweep + web probes, then correlate CVEs and produce the findings report.` }]);
+  `Assess the demo target end to end using the sentinel-recon skill's Phase 0 in-sandbox lab: clone the repo inside the sandbox, start the vulnerable app on localhost:3000 there, then scope_check it, passive fingerprint, request approval for an active port sweep + web probes. Then correlate CVEs with the osv tools and produce the findings report.` }]);
 
 while (pending.length > 0) {
   const id = pending.shift();

@@ -33,6 +33,13 @@ node mcp/scope-guard/scripts/smoke.mjs   # runs 7 protocol checks
 
 ## 2. Connect a model (TrueForge UI → Settings → Models)
 
+**DeepSeek (recommended, cheap + strong tool-calling)** — Settings → Models →
+*custom* provider:
+- Name: `deepseek`
+- Base URL: `https://api.deepseek.com/v1`
+- API key: your DeepSeek key
+- Model IDs: `deepseek-v4-flash`, `deepseek-v4-pro`
+
 **Cloud provider** — pick it from the catalog, paste the API key, done.
 
 **Local Ollama** — Settings → Models → *custom* provider:
@@ -90,13 +97,26 @@ npx tsx scripts/apply-agent.ts
 
 ## 7. Demo target
 
+Nothing to run for the default demo — the agent builds its own lab inside the
+sandbox (see `skills/recon/SKILL.md` Phase 0). For a local target instead:
+
 ```bash
-./target/run-juice-shop.sh    # OWASP Juice Shop -> http://localhost:3000
+./target/run-target.sh    # deliberately weak app -> http://localhost:3000
 ```
 
-localhost is already in the default scope.
+## 8. Spend guard (DeepSeek)
 
-## 8. First run
+The driver script checks your DeepSeek balance before and after every run and
+aborts below a floor (default $1.00 remaining):
+
+```bash
+node --env-file=.env scripts/usage.mjs status     # balance + tracked spend
+SPEND_FLOOR=2 node --env-file=.env scripts/full-assess.mjs
+```
+
+A full assessment costs roughly $0.01–$0.05 with `deepseek-v4-flash`.
+
+## 9. First run
 
 In the chat with the Sentinel agent:
 
@@ -116,4 +136,5 @@ approval card for the port sweep → grant token in commands → OSV lookups →
 | Connector tools list empty | guard not running or URL missing `/mcp` |
 | Skills tab empty | skills must be pushed to GitHub and imported |
 | Sandbox never provisions | Daytona key missing scopes (write/delete snapshots) |
-| Local model loops on tool calls | switch model; qwen2.5-coder is weak at agentic loops |
+| Local model loops on tool calls | switch model; coder-only models are weak at agentic loops |
+| Sandbox can't reach external target | expected: Daytona free tier blocks arbitrary egress. Use in-sandbox lab mode (default) or a Tier 3+ org |

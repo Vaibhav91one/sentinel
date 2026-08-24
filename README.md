@@ -17,15 +17,17 @@ at the policy layer, before any human ever sees a prompt.
             ┌──────────────────────────────────────────────────┐
             │                 TrueForge harness                │
    user ──▶ │  model · approvals · subagents · sessions · UI   │
-            └───────┬───────────────────────────┬──────────────┘
-                    │ MCP                       │ sandbox-as-tool
-                    ▼                           ▼
-        ┌────────────────────┐        ┌────────────────────┐
-        │  scope-guard       │        │  Daytona sandbox   │
-        │  allowlist + hard  │        │  nmap/curl/nuclei  │
-        │  deny + grants +   │        │  run isolated,     │
-        │  append-only audit │        │  secrets stay out  │
-        └────────────────────┘        └────────────────────┘
+            └───────┬───────────────┬──────────────┬───────────┘
+                    │ MCP           │ MCP          │ sandbox-as-tool
+                    ▼               ▼              ▼
+        ┌────────────────┐  ┌───────────────┐  ┌─────────────────────┐
+        │  scope-guard   │  │  osv_query /  │  │  Daytona sandbox    │
+        │  allowlist +   │  │  osv_get      │  │  disposable cloud VM│
+        │  hard deny +   │  │  CVE data     │  │  scanner + target   │
+        │  grants +      │  │  (host-side,  │  │  run isolated;      │
+        │  append-only   │  │  full net)    │  │  secrets stay out   │
+        │  audit         │  └───────────────┘  └─────────────────────┘
+        └────────────────┘
 ```
 
 ## Why this is safe to run
@@ -60,8 +62,19 @@ agent.
 
 ## Demo target
 
+Two modes:
+
+**In-sandbox lab (default, fully self-contained)** — the agent clones this repo
+*inside* the Daytona sandbox, starts `target/vuln-app.mjs` there, and scans it
+on sandbox-localhost. Nothing on your network is ever touched. This works even
+though Daytona's free tier blocks arbitrary egress, because git + npm hosts are
+allowlisted for the clone.
+
+**Local target** — run the same app on your machine and scan it via a tunnel or
+localhost if you run the harness hosted-mode locally:
+
 ```bash
-./target/run-juice-shop.sh   # OWASP Juice Shop on localhost:3000 (Apple containers / Docker)
+./target/run-target.sh        # deliberately weak app on http://localhost:3000
 ```
 
 ## Repo layout
