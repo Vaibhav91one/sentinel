@@ -150,6 +150,74 @@ function buildServer(): McpServer {
   );
 
   server.registerTool(
+    "osv_query",
+    {
+      title: "Query OSV for package vulnerabilities",
+      description:
+        "Runs host-side (the sandbox has restricted egress). Query OSV.dev for known vulnerabilities affecting a package version.",
+      inputSchema: {
+        name: z.string().describe("Package name, e.g. express"),
+        ecosystem: z.string().describe("OSV ecosystem, e.g. npm, PyPI, Go"),
+        version: z.string().optional().describe("Version string when known"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name, ecosystem, version }) => {
+      const body: Record<string, unknown> = { package: { name, ecosystem } };
+      if (version) body.version = version;
+      try {
+        const res = await fetch("https://api.osv.dev/v1/query", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(20000),
+        });
+        const d = await res.json();
+        audit.append({
+          actor: "agent",
+          action: "osv_query",
+          args: { name, ecosystem, version },
+          verdict: "allowed",
+          reason: `${(d.vulns ?? []).length} advisories`,
+        });
+        return text({ count: d.vulns?.length ?? 0, vulns: d.vulns ?? [] });
+      } catch (err) {
+        return text({ error: `osv query failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.registerTool(
+    "osv_get",
+    {
+      title: "Fetch one OSV advisory",
+      description: "Host-side. Fetch full details (severity, affected ranges, references) for an OSV id such as GHSA-xxxx or CVE-xxxx.",
+      inputSchema: { id: z.string().describe("OSV/GHSA/CVE id") },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ id }) => {
+      try {
+        const res = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(id)}`, {
+          signal: AbortSignal.timeout(20000),
+        });
+        if (!res.ok) return text({ error: `HTTP ${res.status}`, found: false });
+        const d = await res.json();
+        return text({
+          id: d.id,
+          summary: d.summary,
+          details: typeof d.details === "string" ? d.details.slice(0, 1500) : d.details,
+          severity: d.severity ?? d.database_specific?.severity,
+          aliases: d.aliases,
+          affected_count: Array.isArray(d.affected) ? d.affected.length : 0,
+          references: (d.references ?? []).slice(0, 8),
+        });
+      } catch (err) {
+        return text({ error: `osv fetch failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.registerTool(
     "scope_list",
     {
       title: "List scope",

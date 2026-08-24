@@ -12,13 +12,13 @@ Input: recon JSONL artifacts (e.g. `artifacts/<host>.recon.jsonl`,
 
 1. **Inventory** — read the artifacts, list distinct services + versions +
    web tech. No network calls needed for this.
-2. **CVE correlation** — for each versioned service, query OSV:
-   ```bash
-   curl -sS -m 15 -X POST https://api.osv.dev/v1/query \
-     -d '{"package":{"name":"nginx","ecosystem":"OSS-Fuzz"}}' | head -c 4000
-   ```
-   For generic software use the `vulnish` name only; drop patch versions you
-   cannot confirm from banners. If a lookup fails, mark the finding
+2. **CVE correlation** — use the host-side OSV MCP tools (the sandbox cannot
+   reach api.osv.dev; these tools run outside it):
+   - `osv_query` with `{name, ecosystem, version}` per versioned package
+     found in the inventory. Ecosystem examples: `npm`, `PyPI`, `Go`.
+   - `osv_get` with an advisory id for full details on anything promising.
+   Only correlate advisories whose affected ranges plausibly cover the
+   observed version. If a lookup fails or returns nothing, mark findings
    `unverified` instead of guessing.
 3. **Reachability reasoning** — downgrade CVEs that require conditions the
    recon did not confirm (auth bypass needing an admin route that returned

@@ -21,6 +21,24 @@ mechanical, not assumed: the scope-guard MCP server is the single source of trut
    metadata.google.internal). The guard hard-denies them; attempting anyway is a
    violation.
 4. One target at a time per subagent. Each subagent re-runs `scope_check` itself.
+5. The sandbox has RESTRICTED egress (package registries + git hosts only).
+   Never try to bypass that firewall. If an external target is unreachable,
+   say so and offer the in-sandbox lab mode below. CVE lookups use the host-side
+   `osv_query` / `osv_get` MCP tools — they work because they run outside the
+   sandbox, not because you should curl OSV yourself.
+
+## Phase 0 — in-sandbox lab (when the target should be local)
+
+For demos and self-contained assessments, build the range inside the sandbox:
+
+```bash
+git clone --depth 1 https://github.com/Vaibhav91one/sentinel /tmp/sentinel
+node /tmp/sentinel/target/vuln-app.mjs &        # serves 127.0.0.1:3000 inside the sandbox
+curl -s -m 5 http://localhost:3000/ | head -20  # confirm it is up
+```
+
+Then treat `http://localhost:3000` as the target (`localhost` is in the default
+scope). Everything runs inside one disposable cloud VM: scanner + target.
 
 ## Phase 1 — passive fingerprint (no approval needed)
 

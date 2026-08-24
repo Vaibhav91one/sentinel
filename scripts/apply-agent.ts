@@ -23,10 +23,18 @@ async function main(): Promise<void> {
     const { data } = await client.agents.create({ name: spec.name, manifest: spec.manifest });
     console.log(`agent "${spec.name}" created (id=${data.id})`);
   } catch (err) {
-    const status = (err as { status?: number }).status;
-    if (status === 409) {
-      console.error(`agent name "${spec.name}" already taken - update it in the UI or delete it first.`);
-      process.exit(2);
+    const errObj = err as { status?: number; statusCode?: number; message?: string };
+    const status = errObj.status ?? errObj.statusCode;
+    if (status === 409 || /already exists/i.test(errObj.message ?? "")) {
+      const { data: list } = await client.agents.list();
+      const existing = (list as unknown as { name: string; id: string }[]).find((a) => a.name === spec.name);
+      if (!existing) {
+        console.error(`name taken but agent not found in list - update via UI.`);
+        process.exit(2);
+      }
+      await client.agents.update(existing.id, { manifest: spec.manifest });
+      console.log(`agent "${spec.name}" updated (id=${existing.id})`);
+      return;
     }
     throw err;
   }
