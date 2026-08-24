@@ -1,0 +1,20 @@
+{
+  "name": "@sentinel/scope-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server enforcing an authorization allowlist + audit trail for Sentinel scans",
+  "bin": { "scope-guard": "dist/index.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}
