@@ -38,7 +38,7 @@ at the policy layer, before any human ever sees a prompt.
 | Rebinding  | public-scoped hostnames are DNS-resolved at check time; resolution into private/link-local space is denied fail-closed |
 | Tripwire   | cloud metadata IPs hard-denied, literally or via DNS resolution          |
 | Human      | intrusive actions require an Allow click in the TrueForge UI            |
-| Token      | approved scans carry a single-use, 10-minute `SENTINEL_GRANT`; verifiable via `verify_grant`, network-level enforcement is roadmap |
+| Consent    | intrusive actions mint a single-use `SENTINEL_GRANT` - **bookkeeping only, not yet a network enforcement boundary** |
 | Auth       | optional `GUARD_TOKEN` bearer lock so only the harness connector can reach the guard |
 | Isolation  | all scanning runs in the TrueForge sandbox, never on the host           |
 | Forensics  | every decision appended to `data/audit.jsonl`, readable via `audit_read`|
@@ -52,8 +52,9 @@ Known limits, stated honestly:
   (roadmap).
 - The guard cannot see HTTP redirects made inside the sandbox (the recon skill
   forbids following them off-target).
-- The grant token is procedural — commands are expected to embed
-  `SENTINEL_GRANT`, nothing network-level forces it yet.
+- The grant token is **procedural** — commands are expected to embed
+  `SENTINEL_GRANT`, and `verify_grant` records consumption, but nothing
+  network-level forces it yet. Treat it as auditable consent, not enforcement.
 - Trust boundary: without `GUARD_TOKEN` set (and matching header auth on the
   TrueForge connector), any local process can call the guard. Set
   `REQUIRE_GUARD_TOKEN=1` to make intrusive grants fail closed when that

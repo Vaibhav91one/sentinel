@@ -161,7 +161,8 @@ function buildServer(): McpServer {
       title: "Request intrusive-scan approval",
       description:
         "Call BEFORE any active/intrusive action against a target (port scans, exploit probes, brute force, fuzzing). "
-        + "The harness pauses this call for explicit human Allow/Deny before it executes; on approval the guard verifies the target is in scope and returns a single-use grant token that must be included in the scan command as SENTINEL_GRANT=<token>.",
+        + "The harness pauses this call for explicit human Allow/Deny before it executes; on approval the guard verifies the target is in scope and mints a single-use consent token (embed as SENTINEL_GRANT=<token>). "
+        + "CONSENT BOOKKEEPING, NOT network enforcement: nothing yet blocks a command that omits the token (roadmap: egress proxy). Grants are scoped to host[:port] only - scheme and path are not part of the binding.",
       inputSchema: {
         target: z.string().describe("The exact target the intrusive action will touch"),
         action: z.string().describe("Short label of the action, e.g. 'nmap full port sweep'"),
@@ -292,8 +293,8 @@ function buildServer(): McpServer {
     {
       title: "Verify intrusive-scan grant",
       description:
-        "Consumes a single-use grant token for a target. Returns valid:false on reuse, expiry, or target mismatch. "
-        + "NOTE: today this verifies consent bookkeeping; scanning commands are expected to embed SENTINEL_GRANT but nothing network-level forces them to yet (see policy_get residual risks).",
+        "Consumes a single-use grant token for a target. Returns valid:false on reuse, expiry, or target mismatch (host[:port] scope - scheme/path are not part of the binding). "
+        + "This is consent bookkeeping; see policy_get for the enforcement roadmap.",
       inputSchema: {
         token: z.string().describe("The SENTINEL_GRANT value returned by request_intrusive_approval"),
         target: z.string().describe("The exact target the grant was issued for"),
@@ -301,15 +302,18 @@ function buildServer(): McpServer {
       annotations: { readOnlyHint: false },
     },
     async ({ token, target }) => {
-      const result = consumeGrant(token, normalizeTargetValue(target) ?? target);
+      const requested = normalizeTargetValue(target) ?? target;
+      const result = consumeGrant(token, requested);
+      const g = result.valid ? null : undefined;
+      void g;
       audit.append({
         actor: "agent",
         action: "grant_verify",
-        args: { target, token: `${token.slice(0, 8)}…` },
+        args: { target: requested, token: `${token.slice(0, 8)}…` },
         verdict: result.valid ? "allowed" : "denied",
         reason: result.reason,
       });
-      return text(result);
+      return text({ ...result, bound_target: requested });
     },
   );
 
@@ -351,7 +355,7 @@ function buildServer(): McpServer {
           "residual risk: the target may re-resolve between scope_check and the actual connection - check-time resolution narrows but does not eliminate rebinding; an egress proxy is the complete fix (roadmap)",
           "cloud metadata endpoints (169.254.169.254, metadata.google.internal) are hard-denied, including by DNS resolution",
           "link-local space is hard-denied, including CIDR entries that overlap it",
-          "intrusive actions: the TrueForge harness pauses request_intrusive_approval for a human Allow/Deny BEFORE it executes; the guard then mints a single-use 10-minute grant token",
+          "intrusive actions: the TrueForge harness pauses request_intrusive_approval for a human Allow/Deny BEFORE it executes; the minted grant is CONSENT BOOKKEEPING ONLY - it is not yet enforced at the network/command layer (roadmap: egress proxy)",
           "trust boundary: set GUARD_TOKEN here + header auth on the harness connector so ONLY the harness can call this server; REQUIRE_GUARD_TOKEN=1 fails closed ALL policy mutations (add/remove/grants) when that invariant cannot be verified",
           "all decisions land in the append-only audit log (audit_read)",
         ],
