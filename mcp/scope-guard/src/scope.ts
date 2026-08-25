@@ -37,8 +37,18 @@ export class Scope {
   readonly file: string;
   private state: ScopeState;
 
-  constructor(file: string) {
+  private lookup: (host: string) => Promise<{ address: string }[]>;
+
+  /**
+   * `lookup` is injectable so unit tests can drive DNS outcomes
+   * (rebinding, mixed answers, NXDOMAIN) without a network.
+   */
+  constructor(
+    file: string,
+    lookup: (host: string) => Promise<{ address: string }[]> = (h) => dns.lookup(h, { all: true }),
+  ) {
     this.file = file;
+    this.lookup = lookup;
     this.state = this.load();
   }
 
@@ -165,7 +175,7 @@ export class Scope {
 
     let addresses: string[];
     try {
-      addresses = (await dns.lookup(host, { all: true })).map((a) => a.address);
+      addresses = (await this.lookup(host)).map((a) => a.address);
     } catch {
       return {
         allowed: false,

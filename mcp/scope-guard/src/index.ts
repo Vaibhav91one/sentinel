@@ -200,7 +200,8 @@ function buildServer(): McpServer {
       audit.append({
         actor: "human-via-agent",
         action: "intrusive_request",
-        args: { target: canonicalTarget, action, grant: token },
+        // fingerprint only - audit_read must never expose redeemable grant material
+        args: { target: canonicalTarget, action, grant: `${token.slice(0, 8)}…` },
         verdict: "allowed",
         reason: `human Allow/Deny enforced upstream by the harness checkpoint on this call; in-scope verified, single-use grant minted (${GRANT_TTL_MS / 60000} min)${GUARD_TOKEN ? "" : "; WARNING: no GUARD_TOKEN set - boundary open to local callers"}`,
       });
