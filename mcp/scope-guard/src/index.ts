@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { Scope, defaultScopeFile } from "./scope.js";
+import { Scope, defaultScopeFile, normalizeTargetValue } from "./scope.js";
 import { Audit, defaultAuditFile } from "./audit.js";
 
 const NAME = "sentinel-scope-guard";
@@ -26,6 +26,18 @@ const GUARD_TOKEN = process.env.GUARD_TOKEN;
  * happened. Default is warn-only so local development stays friction-free.
  */
 const REQUIRE_GUARD_TOKEN = process.env.REQUIRE_GUARD_TOKEN === "1";
+
+/**
+ * When true (REQUIRE_GUARD_TOKEN=1 set but no GUARD_TOKEN configured) the
+ * harness-only invariant cannot hold, so EVERY allowlist mutation and grant
+ * mint fails closed - not just grants.
+ */
+function failClosed(): boolean {
+  return REQUIRE_GUARD_TOKEN && !GUARD_TOKEN;
+}
+
+const FAIL_CLOSED_MSG =
+  "fail-closed deployment: REQUIRE_GUARD_TOKEN=1 requires GUARD_TOKEN to be set so only the TrueForge harness connector can mutate policy.";
 
 const scope = new Scope(defaultScopeFile());
 const audit = new Audit(defaultAuditFile());
@@ -101,7 +113,11 @@ function buildServer(): McpServer {
       inputSchema: { entry: z.string().describe("Scope entry to add") },
       annotations: { destructiveHint: true },
     },
-    ({ entry }) => {
+    async ({ entry }) => {
+      if (failClosed()) {
+        audit.append({ actor: "agent", action: "scope_add", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
+        return text({ error: FAIL_CLOSED_MSG });
+      }
       const error = scope.add(entry);
       audit.append({
         actor: "human-via-agent",
@@ -122,7 +138,11 @@ function buildServer(): McpServer {
       inputSchema: { entry: z.string().describe("Exact scope entry to remove") },
       annotations: { destructiveHint: true },
     },
-    ({ entry }) => {
+    async ({ entry }) => {
+      if (failClosed()) {
+        audit.append({ actor: "agent", action: "scope_remove", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
+        return text({ error: FAIL_CLOSED_MSG });
+      }
       const removed = scope.remove(entry);
       audit.append({
         actor: "human-via-agent",
@@ -175,11 +195,12 @@ function buildServer(): McpServer {
             "fail-closed deployment: REQUIRE_GUARD_TOKEN=1 requires a shared bearer token so only the TrueForge harness connector can mint grants. Configure GUARD_TOKEN on the guard and the same value as header auth on the harness connector.",
         });
       }
-      const token = mintGrant(target, action);
+      const canonicalTarget = normalizeTargetValue(target) ?? target;
+      const token = mintGrant(canonicalTarget, action);
       audit.append({
         actor: "human-via-agent",
         action: "intrusive_request",
-        args: { target, action, grant: token },
+        args: { target: canonicalTarget, action, grant: token },
         verdict: "allowed",
         reason: `human Allow/Deny enforced upstream by the harness checkpoint on this call; in-scope verified, single-use grant minted (${GRANT_TTL_MS / 60000} min)${GUARD_TOKEN ? "" : "; WARNING: no GUARD_TOKEN set - boundary open to local callers"}`,
       });
@@ -278,8 +299,8 @@ function buildServer(): McpServer {
       },
       annotations: { readOnlyHint: false },
     },
-    ({ token, target }) => {
-      const result = consumeGrant(token, target);
+    async ({ token, target }) => {
+      const result = consumeGrant(token, normalizeTargetValue(target) ?? target);
       audit.append({
         actor: "agent",
         action: "grant_verify",
@@ -330,7 +351,7 @@ function buildServer(): McpServer {
           "cloud metadata endpoints (169.254.169.254, metadata.google.internal) are hard-denied, including by DNS resolution",
           "link-local space is hard-denied, including CIDR entries that overlap it",
           "intrusive actions: the TrueForge harness pauses request_intrusive_approval for a human Allow/Deny BEFORE it executes; the guard then mints a single-use 10-minute grant token",
-          "trust boundary: set GUARD_TOKEN here + header auth on the harness connector so ONLY the harness can call this server; REQUIRE_GUARD_TOKEN=1 fails closed when that invariant cannot be verified",
+          "trust boundary: set GUARD_TOKEN here + header auth on the harness connector so ONLY the harness can call this server; REQUIRE_GUARD_TOKEN=1 fails closed ALL policy mutations (add/remove/grants) when that invariant cannot be verified",
           "all decisions land in the append-only audit log (audit_read)",
         ],
         allow_size: scope.list().length,

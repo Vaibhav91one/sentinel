@@ -277,6 +277,12 @@ function cidrOverlaps(a: string, b: string): boolean {
   return (aI & m) === (bI & m);
 }
 
+/** Public wrapper for canonical host[:port] normalization used by grant bookkeeping. */
+export function normalizeTargetValue(target: string): string | null {
+  const n = normalizeTarget(target);
+  return n ? n.value : null;
+}
+
 function normalizeTarget(target: string): { value: string; display: string } | null {
   let s = target.trim().toLowerCase();
   if (s.length === 0) return null;

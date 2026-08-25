@@ -96,6 +96,10 @@ try {
     { target: "http://localhost:3000", action: "test sweep" },
   );
   check("REQUIRE_GUARD_TOKEN=1 fails closed without configured token", bGrant.approved === false && /fail-closed/i.test(bGrant.reason ?? ""), JSON.stringify(bGrant).slice(0, 200));
+  const bAdd = await callTool(B, "scope_add", { entry: "10.99.99.99" });
+  check("fail-closed blocks scope_add too", typeof bAdd.error === "string" && bAdd.error.includes("fail-closed"), JSON.stringify(bAdd));
+  const bRm = await callTool(B, "scope_remove", { entry: "localhost" });
+  check("fail-closed blocks scope_remove too", typeof bRm.error === "string" && bRm.error.includes("fail-closed"), JSON.stringify(bRm));
 
   // Instance C: dev mode mints but warns
   const C = 9933;
@@ -104,6 +108,11 @@ try {
   const cGrant = await callTool(C, "request_intrusive_approval", { target: "http://localhost:3000", action: "test sweep" });
   check("dev-mode grant mints", cGrant.approved === true && typeof cGrant.grant_token === "string", JSON.stringify(cGrant).slice(0, 160));
   check("dev-mode grant carries boundary warning", typeof cGrant.warning === "string" && cGrant.warning.includes("GUARD_TOKEN"), JSON.stringify(cGrant.warning));
+
+  // Canonical target bookkeeping: minted for trailing-slash URL verifies bare
+  const cCanon = await callTool(C, "request_intrusive_approval", { target: "http://localhost:3000/", action: "canonical test" });
+  const vCanon = await callTool(C, "verify_grant", { token: cCanon.grant_token, target: "http://localhost:3000" });
+  check("grant targets canonicalized (slash variants interoperate)", vCanon.valid === true, JSON.stringify(vCanon));
 
   // Single-use consumption with non-destructive wrong-target handling
   const vWrong = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://other-target:1" });
