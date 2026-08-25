@@ -228,11 +228,21 @@ export class Scope {
 
     let addresses: string[];
     try {
-      addresses = (await this.lookup(host)).map((a) => a.address);
+      addresses = (await this.lookup(host))
+        .map((a) => a.address)
+        .filter((a) => typeof a === "string" && a.length > 0);
     } catch {
       return {
         allowed: false,
         reason: `fail-closed: scoped hostname "${host}" did not resolve`,
+        target_class: "unresolvable_input",
+        matched,
+      };
+    }
+    if (addresses.length === 0) {
+      return {
+        allowed: false,
+        reason: `fail-closed: scoped hostname "${host}" resolved to zero usable addresses`,
         target_class: "unresolvable_input",
         matched,
       };

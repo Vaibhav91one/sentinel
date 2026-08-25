@@ -49,6 +49,13 @@ test("NXDOMAIN fails closed even when scoped", async () => {
   assert.match(r.reason, /fail-closed/);
 });
 
+test("empty DNS answer fails closed even when scoped", async () => {
+  const s = makeScope(["empty.example"], async () => []);
+  const r = await s.check("http://empty.example");
+  assert.equal(r.allowed, false);
+  assert.match(r.reason, /zero usable addresses/);
+});
+
 test("internally-scoped name resolving public is denied as class mismatch", async () => {
   const s = makeScope(["intranet.local"], async () => [{ address: "93.184.216.34" }]);
   const r = await s.check("http://intranet.local");
