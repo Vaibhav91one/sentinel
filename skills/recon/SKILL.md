@@ -31,7 +31,9 @@ mechanical, not assumed: the scope-guard MCP server is the single source of trut
 
 ## Phase 0 — in-sandbox lab (when the target should be local)
 
-For demos and self-contained assessments, build the range inside the sandbox:
+For demos and self-contained assessments, build the range inside the sandbox.
+
+**Option A — bundled vulnerable app (default):**
 
 ```bash
 git clone --depth 1 https://github.com/Vaibhav91one/sentinel /tmp/sentinel
@@ -39,8 +41,21 @@ node /tmp/sentinel/target/vuln-app.mjs &        # serves 127.0.0.1:3000 inside t
 curl -s -m 5 http://localhost:3000/ | head -20  # confirm it is up
 ```
 
-Then treat `http://localhost:3000` as the target (`localhost` is in the default
-scope). Everything runs inside one disposable cloud VM: scanner + target.
+**Option B — real platform (OWASP Juice Shop), deterministic script:**
+
+```bash
+git clone --depth 1 https://github.com/Vaibhav91one/sentinel /tmp/sentinel
+bash /tmp/sentinel/sandbox-setup/juice-shop.sh   # downloads release, boots, polls up to 4 min
+cat /tmp/js_status.txt                           # "READY http://localhost:3000" or "FAILED <reason>"
+tail -30 /tmp/js.log                             # read this ONLY if status is FAILED
+```
+
+Run the script, then check `/tmp/js_status.txt`. If `READY`, treat
+`http://localhost:3000` as the target (`localhost` is default-scoped). If
+`FAILED`, report the reason from the status file and stop — do NOT improvise
+alternative install paths; that is what caused past failures.
+
+Both options keep scanner + target co-located inside one disposable cloud VM.
 
 ## Phase 1 — passive fingerprint (no approval needed)
 
