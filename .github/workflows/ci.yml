@@ -29,11 +29,12 @@ jobs:
       - name: Start scope-guard
         run: |
           node mcp/scope-guard/dist/index.js &
-          echo "5230" > /dev/null
           for i in $(seq 1 20); do
-            curl -sf http://127.0.0.1:9930/healthz && break
+            curl -sf http://127.0.0.1:9930/healthz && exit 0
             sleep 1
           done
+          echo "scope-guard failed to start" >&2
+          exit 1
 
       - name: Protocol smoke tests
         run: node mcp/scope-guard/scripts/smoke.mjs
@@ -43,5 +44,11 @@ jobs:
           result=$(curl -s -H content-type:application/json -H 'accept: application/json, text/event-stream' \
             -d '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"scope_check","arguments":{"target":"https://example.com"}}}' \
             http://127.0.0.1:9930/mcp)
-          echo "$result" | grep -q '"allowed":false'
-          echo "deny-by-default holds"
+          echo "$result" > /tmp/resp.json
+          python3 - <<'EOF'
+          import json
+          outer = json.load(open("/tmp/resp.json"))
+          inner = json.loads(outer["result"]["content"][0]["text"])
+          assert inner["allowed"] is False, f"deny-by-default violated: {inner}"
+          print("deny-by-default holds:", inner["reason"])
+          EOF
