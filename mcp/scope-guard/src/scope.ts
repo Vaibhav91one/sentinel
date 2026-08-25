@@ -86,6 +86,7 @@ export class Scope {
         "192.0.0.0/24", // IETF protocol assignments
         "192.0.2.0/24", // TEST-NET-1
         "198.18.0.0/15", // benchmarking
+        "192.88.99.0/24", // 6to4 relay anycast (deprecated)
         "198.51.100.0/24", // TEST-NET-2
         "203.0.113.0/24", // TEST-NET-3
         "224.0.0.0/4", // multicast

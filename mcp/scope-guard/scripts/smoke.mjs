@@ -156,6 +156,10 @@ const u3 = await tool("scope_check", { target: "http://192.0.2.1" });
 check("TEST-NET-1 literal denied", u3.allowed === false && u3.target_class === "reserved", JSON.stringify(u3));
 const u4 = await tool("scope_add", { entry: "203.0.113.0/24" });
 check("TEST-NET-3 CIDR refused at add", typeof u4.error === "string" && u4.error.includes("hard-denied"), JSON.stringify(u4));
+for (const range of ["0.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "224.0.0.0/4", "240.0.0.0/4"]) {
+  const r = await tool("scope_add", { entry: range });
+  check(`reserved CIDR refused at add (${range})`, typeof r.error === "string" && r.error.includes("hard-denied"), JSON.stringify(r));
+}
 
 // Offline: IPv6 literal entries round-trip ("[::1]" canonicalizes onto default-scoped "::1")
 const v1 = await tool("scope_add", { entry: "[::1]" });
