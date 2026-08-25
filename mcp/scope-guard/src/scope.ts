@@ -221,9 +221,11 @@ export class Scope {
   remove(entry: string): boolean {
     const normalized = normalizeEntry(entry);
     if (normalized === null) return false;
-    const before = this.state.allow.length;
+    const beforeAllow = this.state.allow.length;
     this.state.allow = this.state.allow.filter((e) => e !== normalized);
-    if (this.state.allow.length !== before) {
+    const beforeTemp = this.state.temporary?.length ?? 0;
+    if (this.state.temporary) this.state.temporary = this.state.temporary.filter((t) => t.entry !== normalized);
+    if (this.state.allow.length !== beforeAllow || this.state.temporary.length !== beforeTemp) {
       this.state.updated_at = new Date().toISOString();
       this.save();
       return true;

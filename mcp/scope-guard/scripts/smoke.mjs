@@ -34,9 +34,17 @@ async function rpc(method, params) {
 }
 
 async function tool(name, args) {
+  if (name === "scope_add_temporary") console.log("  [dbg] calling", name, JSON.stringify(args));
   const r = await rpc("tools/call", { name, arguments: args });
+  if (name === "scope_add_temporary") console.log("  [dbg] raw:", JSON.stringify(r).slice(0, 300));
   if (r.error) return { error: r.error.message ?? "rpc error" };
-  return JSON.parse(r.result.content[0].text);
+  const raw = r.result?.content?.[0]?.text;
+  if (raw === undefined) return { error: r.result?.isError ? "tool error (no content)" : "no content" };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { error: raw }; // protocol-level errors arrive as plain text
+  }
 }
 
 const init = await rpc("initialize", {
@@ -201,6 +209,25 @@ for (const bad of ["example.com:0", "example.com:65536", "example.com:99999"]) {
 // cleanup
 await tool("scope_remove", { entry: "*.nip.io" });
 await tool("scope_remove", { entry: "10.50.77.0/24" });
+
+// autonomous temporary scope (risk-tiered autonomy)
+const ta = await tool("scope_add_temporary", { entry: "cdn.example", ttl_minutes: 30 });
+check(
+  "temporary entry accepted or already-live",
+  !!ta.temporary?.some((x) => x.entry === "cdn.example") ||
+    (typeof ta.error === "string" && ta.error.includes("already temporarily scoped")),
+  JSON.stringify(ta),
+);
+const tb = await tool("scope_add_temporary", { entry: "10.0.0.1", ttl_minutes: 30 });
+check("non-public temporary refused", typeof tb.error === "string" && tb.error.includes("public hosts"), JSON.stringify(tb));
+const tc = await tool("scope_add_temporary", { entry: "a.example", ttl_minutes: 90 });
+check("TTL cap enforced", typeof tc.error === "string" && /(1-60|less than or equal to 60)/i.test(tc.error), JSON.stringify(tc));
+const td = await tool("scope_check", { target: "http://cdn.example" });
+check(
+  "temporary entry consulted by scope_check (fake host fail-closes)",
+  typeof td.matched === "string" && td.matched.includes("cdn") && td.allowed === false,
+  JSON.stringify(td),
+);
 
 const audit = await tool("audit_read", { limit: 5 });
 check("audit log records entries", Array.isArray(audit.entries) && audit.entries.length > 0, JSON.stringify(audit).slice(0, 120));
