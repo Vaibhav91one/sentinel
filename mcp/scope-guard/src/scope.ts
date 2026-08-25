@@ -31,7 +31,7 @@ export interface ScopeState {
   updated_at: string;
 }
 
-const DEFAULT_ALLOW = ["localhost", "127.0.0.1", "[::1]"];
+const DEFAULT_ALLOW = ["localhost", "127.0.0.1", "::1"];
 
 export class Scope {
   readonly file: string;
@@ -145,8 +145,8 @@ export class Scope {
       };
     }
 
-    const host = normalized.value.replace(/:\d{1,5}$/, "").replace(/^\[|\]$/g, "");
-    const entryHost = matched.replace(/:\d{1,5}$/, "");
+    const host = splitHostPort(normalized.value).host;
+    const entryHost = splitHostPort(matched).host;
     const needsResolution = !isIP(host) && !entryHost.includes("/");
     if (!needsResolution) {
       return { allowed: true, reason: `matches scoped entry "${matched}"`, target_class: cls, matched };
@@ -174,16 +174,34 @@ export class Scope {
       };
     }
     if (
-      cls === "public" &&
-      (resolvedClasses.has("private") ||
-        resolvedClasses.has("loopback") ||
-        resolvedClasses.has("link_local") ||
-        resolvedClasses.has("reserved"))
+      resolvedClasses.has("link_local") ||
+      resolvedClasses.has("reserved")
     ) {
+      return {
+        allowed: false,
+        reason: `DNS rebinding guard: "${host}" resolves to link-local/reserved space (${addresses.join(", ")})`,
+        target_class: "link_local",
+        matched,
+      };
+    }
+    // Public-scoped names must not silently become internal targets...
+    if (cls === "public" && (resolvedClasses.has("private") || resolvedClasses.has("loopback"))) {
       return {
         allowed: false,
         reason: `DNS rebinding guard: public-scoped "${host}" resolves to private address (${addresses.join(", ")}) — scope the IP/CIDR explicitly instead`,
         target_class: "private",
+        matched,
+      };
+    }
+    // ...and internally-scoped names must not silently become public ones.
+    if (
+      (cls === "private" || cls === "loopback") &&
+      resolvedClasses.has("public")
+    ) {
+      return {
+        allowed: false,
+        reason: `class mismatch guard: "${cls}"-scoped "${host}" resolves to public address (${addresses.join(", ")})`,
+        target_class: "public",
         matched,
       };
     }
@@ -202,7 +220,16 @@ function normalizeEntry(entry: string): string | null {
     if (octets.every((o) => o <= 255) && bits <= 32) return s; // strict IPv4 CIDR
     return null;
   }
-  if (/^[\w.-]+(:\d{1,5})?$/i.test(s)) return s.toLowerCase(); // host[:port]
+  // IPv6 literal, optionally bracketed and with a port: "::1", "[::1]", "[::1]:8080"
+  // Stored bare (no brackets, no port) so list/match comparisons stay simple;
+  // a port on an unbracketed v6 literal is ambiguous and therefore rejected.
+  if (/^\[[0-9a-f:]+\](?::\d{1,5})?$/i.test(s)) {
+    return s.slice(1, s.indexOf("]")).toLowerCase();
+  }
+  if (/^[0-9a-f:]+$/i.test(s) && (s.match(/:/g)?.length ?? 0) >= 2) {
+    return s.toLowerCase();
+  }
+  if (/^[\w.-]+$/i.test(s)) return s.toLowerCase(); // host or host:port
   return null;
 }
 
@@ -241,7 +268,7 @@ function normalizeTarget(target: string): { value: string; display: string } | n
 
 /** Loose classification without DNS resolution; input is already host[:port]. */
 function classify(hostPort: string): TargetClass {
-  const host = hostPort.replace(/:\d{1,5}$/, "").replace(/^\[|\]$/g, "");
+  const host = splitHostPort(hostPort).host;
   if (host === "169.254.169.254" || host === "metadata.google.internal") return "cloud_metadata";
   if (host === "localhost" || host.endsWith(".localhost")) return "loopback";
   if (isIPv4(host)) {
@@ -263,25 +290,42 @@ function classify(hostPort: string): TargetClass {
   return /\.local$/.test(host) ? "private" : "public";
 }
 
+/**
+ * Split host[:port] without mangling IPv6 literals ("::1" is a host, not
+ * "host : port"). Bracketed forms "[::1]" / "[::1]:8080" are unwrapped.
+ */
+export function splitHostPort(s: string): { host: string; port?: string } {
+  const x = s.trim();
+  if (x.startsWith("[")) {
+    const close = x.indexOf("]");
+    if (close !== -1) {
+      const host = x.slice(1, close);
+      const port = x.slice(close + 1).match(/^:(\d{1,5})$/)?.[1];
+      return { host, port };
+    }
+  }
+  if (/^[0-9a-f:]+$/i.test(x) && (x.match(/:/g)?.length ?? 0) >= 2) return { host: x.toLowerCase() }; // bare IPv6
+  const m = /^([\w.-]+):(\d{1,5})$/.exec(x);
+  if (m) return { host: m[1].toLowerCase(), port: m[2] };
+  return { host: x.toLowerCase() };
+}
+
 function isIPv4(s: string): boolean {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
   return m !== null && m.slice(1).every((o) => Number(o) <= 255);
 }
 
-function matches(entry: string, target: { value: string }): boolean {
-  const host = target.value.replace(/:\d{1,5}$/, "");
-  const port = target.value.match(/:(\d{1,5})$/)?.[1];
 
-  // host[:port] entry: port must match when specified on the entry
-  const entryPort = entry.match(/:(\d{1,5})$/)?.[1];
-  const entryHost = entry.replace(/:\d{1,5}$/, "");
+function matches(entry: string, target: { value: string }): boolean {
+  // v6 targets come through URL.hostname bracketed ("[::1]:80"); entries are stored bare.
+  const { host, port } = splitHostPort(target.value);
+  const { host: entryHost, port: entryPort } = splitHostPort(entry);
 
   if (entryHost.includes("/")) return isIPv4(host) && cidrContains(entryHost, host); // CIDR
   if (entryHost.startsWith("*.")) {
     const suffix = entryHost.slice(1); // ".example.com"
     return host.endsWith(suffix) && host.length > suffix.length;
   }
-  if (isIPv4(entryHost) || entryHost.includes(":")) return entryHost === host && (entryPort === undefined || entryPort === port);
   return entryHost === host && (entryPort === undefined || entryPort === port);
 }
 

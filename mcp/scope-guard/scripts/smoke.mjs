@@ -107,6 +107,20 @@ check("reserved literal (0.0.0.0) denied", t4.allowed === false && t4.target_cla
 const t4b = await tool("scope_check", { target: "http://100.64.99.99" });
 check("unscoped reserved literal (CGNAT) denied", t4b.allowed === false && t4b.target_class === "reserved", JSON.stringify(t4b));
 
+// Offline: IPv6 literal entries round-trip ("[::1]" canonicalizes onto default-scoped "::1")
+const v1 = await tool("scope_add", { entry: "[::1]" });
+check(
+  "bracketed IPv6 entry parsed",
+  !!v1.allow?.includes("::1") || (typeof v1.error === "string" && v1.error.includes("already scoped")),
+  JSON.stringify(v1),
+);
+const v2 = await tool("scope_add", { entry: "2001:db8::1" });
+check("plain IPv6 entry accepted", !!v2.allow?.includes("2001:db8::1"), JSON.stringify(v2));
+const v3 = await tool("scope_check", { target: "http://[2001:db8::1]:8080" });
+check("IPv6 target matches scoped entry", v3.allowed === true && v3.matched === "2001:db8::1", JSON.stringify(v3));
+const v4 = await tool("scope_remove", { entry: "2001:db8::1" });
+check("IPv6 entry removable", v4.removed === true, JSON.stringify(v4));
+
 // cleanup
 await tool("scope_remove", { entry: "*.nip.io" });
 await tool("scope_remove", { entry: "10.50.77.0/24" });
