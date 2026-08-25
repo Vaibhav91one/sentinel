@@ -73,6 +73,9 @@ export class Scope {
     if (cls === "link_local") {
       return `refused: link-local space (169.254.0.0/16, fe80::/10) is hard-denied and cannot be allow-listed`;
     }
+    if (cls === "reserved") {
+      return `refused: reserved/non-routable ranges are hard-denied and cannot be allow-listed`;
+    }
     // A CIDR that overlaps link-local or metadata space would silently
     // authorize those addresses through a seemingly innocuous range.
     if (entryHostIncludesSlash(normalized)) {
@@ -128,6 +131,9 @@ export class Scope {
     }
     if (cls === "link_local") {
       return { allowed: false, reason: "HARD DENY: link-local address", target_class: cls };
+    }
+    if (cls === "reserved") {
+      return { allowed: false, reason: "HARD DENY: reserved/non-routable address", target_class: cls };
     }
 
     let matched: string | undefined;
@@ -224,11 +230,11 @@ function normalizeEntry(entry: string): string | null {
   // Stored bare (no brackets, no port) so list/match comparisons stay simple;
   // a port on an unbracketed v6 literal is ambiguous and therefore rejected.
   if (/^\[[0-9a-f:]+\](?::\d{1,5})?$/i.test(s)) {
-    return s.slice(1, s.indexOf("]")).toLowerCase();
+    return canonicalV6(s.slice(1, s.indexOf("]")).toLowerCase());
   }
   if (/^::ffff:\d{1,3}(\.\d{1,3}){3}$/i.test(s)) return s.toLowerCase(); // mapped-v6 dotted
   if (/^[0-9a-f:]+$/i.test(s) && (s.match(/:/g)?.length ?? 0) >= 2) {
-    return s.toLowerCase();
+    return canonicalV6(s.toLowerCase());
   }
   if (/^[\w.-]+:\d{1,5}$/i.test(s)) return s.toLowerCase(); // host:port
   if (/^[\w.-]+$/i.test(s)) return s.toLowerCase(); // host
@@ -284,6 +290,48 @@ function unwrapMappedV6(host: string): string | null {
   return null;
 }
 
+/** Parse an IPv6 literal (no brackets/port/zone) into its 8 hextet groups, else null. */
+export function parseIPv6(s: string): number[] | null {
+  if (!s.includes(":") || !/^[0-9a-f:.]+$/i.test(s)) return null;
+  const doubleColons = s.match(/::/g)?.length ?? 0;
+  if (doubleColons > 1) return null;
+  // Embedded dotted-quad tails are rejected here; mapped-v6 is unwrapped earlier.
+  if (/\.|$/.test("") ) { /* noop to keep structure clear */ }
+  const parts = s.split(":");
+  if (parts.some((p) => p.includes("."))) return null;
+  let head: string[] = parts;
+  let tail: string[] = [];
+  if (doubleColons === 1) {
+    const idx = s.indexOf("::");
+    const headStr = s.slice(0, idx);
+    const tailStr = s.slice(idx + 2);
+    head = headStr === "" ? [] : headStr.split(":");
+    tail = tailStr === "" ? [] : tailStr.split(":");
+    if (head.some((p) => p === "") || tail.some((p) => p === "")) return null;
+  }
+  if (head.length + tail.length > 8) return null;
+  const missing = 8 - (head.length + tail.length);
+  if (!s.includes("::") && missing !== 0) return null;
+  const groups = [...head, ...Array<string>(missing).fill("0"), ...tail].map((g) => parseInt(g || "0", 16));
+  return groups.some((g) => Number.isNaN(g)) ? null : groups;
+}
+
+/** Canonical lowercase form of an IPv6 literal ("0:0:..:1" -> "::1"), or the input unchanged. */
+export function canonicalV6(host: string): string {
+  const g = parseIPv6(host);
+  if (!g) return host;
+  // RFC 5952-style: first longest zero run becomes "::"
+  let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+  for (let i = 0; i < 8; i++) {
+    if (g[i] === 0) { if (curStart === -1) curStart = i; curLen++; if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; } }
+    else curStart = -1, curLen = 0;
+  }
+  if (bestLen < 2) return g.map((n) => n.toString(16)).join(":");
+  const head = g.slice(0, bestStart).map((n) => n.toString(16)).join(":");
+  const tail = g.slice(bestStart + bestLen).map((n) => n.toString(16)).join(":");
+  return `${head}::${tail}`;
+}
+
 function classify(hostPort: string): TargetClass {
   let host = splitHostPort(hostPort).host;
   // IPv4-mapped IPv6 ("::ffff:169.254.169.254", "::ffff:a9fe:a9fe") must be
@@ -307,9 +355,14 @@ function classify(hostPort: string): TargetClass {
     return "public";
   }
   if (host.includes(":")) {
-    if (host === "::1") return "loopback";
-    if (/^f[cd]/.test(host)) return "private";
-    if (/^fe[89ab]/.test(host)) return "link_local";
+    const g = parseIPv6(host);
+    if (!g) return "reserved"; // colon-string we cannot parse: fail closed
+    if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0 && g[6] === 0 && g[7] === 1)
+      return "loopback";
+    if ((g[0] & 0xffc0) === 0xfe80) return "link_local"; // fe80::/10
+    if ((g[0] & 0xfe00) === 0xfc00) return "private"; // fc00::/7 ULA
+    if (g[0] >= 0xff00) return "reserved"; // multicast ff00::/8 and beyond
+    if (g[0] === 0x2001 && g[1] === 0x0db8) return "reserved"; // documentation
     return "public";
   }
   return /\.local$/.test(host) ? "private" : "public";
@@ -329,7 +382,7 @@ export function splitHostPort(s: string): { host: string; port?: string } {
       return { host, port };
     }
   }
-  if (/^[0-9a-f:]+$/i.test(x) && (x.match(/:/g)?.length ?? 0) >= 2) return { host: x.toLowerCase() }; // bare IPv6
+  if (/^[0-9a-f:]+$/i.test(x) && (x.match(/:/g)?.length ?? 0) >= 2) return { host: canonicalV6(x.toLowerCase()) }; // bare IPv6
   const m = /^([\w.-]+):(\d{1,5})$/.exec(x);
   if (m) return { host: m[1].toLowerCase(), port: m[2] };
   return { host: x.toLowerCase() };

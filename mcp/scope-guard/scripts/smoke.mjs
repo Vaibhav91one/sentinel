@@ -131,6 +131,22 @@ const p3 = await tool("scope_check", { target: "https://example.com:8080" });
 check("different port denied", p3.allowed === false, JSON.stringify(p3));
 await tool("scope_remove", { entry: "example.com:8443" });
 
+// Offline: expanded IPv6 loopback canonicalizes onto the "::1" entry
+const e1 = await tool("scope_check", { target: "http://[0:0:0:0:0:0:0:1]:3000" });
+check("expanded IPv6 loopback matches ::1 entry", e1.allowed === true && e1.matched === "::1", JSON.stringify(e1));
+const e2 = await tool("scope_check", { target: "http://[fe80:0:0:0:0:0:0:1]" });
+check("expanded link-local hard-denied", e2.allowed === false && e2.reason.includes("link-local"), JSON.stringify(e2));
+const e3 = await tool("scope_add", { entry: "fe80::1" });
+check("link-local v6 entry refused", typeof e3.error === "string" && e3.error.includes("link-local"), JSON.stringify(e3));
+const e4 = await tool("scope_add", { entry: "0:0:0:0:0:0:0:1" });
+check("expanded loopback canonical-deduped", typeof e4.error === "string" && e4.error.includes("already scoped"), JSON.stringify(e4));
+
+// Offline: reserved literals are hard-denied even after an add attempt
+const r1 = await tool("scope_check", { target: "http://224.0.0.1" });
+check("multicast literal denied", r1.allowed === false && r1.target_class === "reserved", JSON.stringify(r1));
+const r2 = await tool("scope_add", { entry: "224.0.0.1" });
+check("multicast entry refused at add", typeof r2.error === "string" && r2.error.includes("hard-denied"), JSON.stringify(r2));
+
 // Offline: IPv6 literal entries round-trip ("[::1]" canonicalizes onto default-scoped "::1")
 const v1 = await tool("scope_add", { entry: "[::1]" });
 check(
@@ -138,11 +154,11 @@ check(
   !!v1.allow?.includes("::1") || (typeof v1.error === "string" && v1.error.includes("already scoped")),
   JSON.stringify(v1),
 );
-const v2 = await tool("scope_add", { entry: "2001:db8::1" });
-check("plain IPv6 entry accepted", !!v2.allow?.includes("2001:db8::1"), JSON.stringify(v2));
-const v3 = await tool("scope_check", { target: "http://[2001:db8::1]:8080" });
-check("IPv6 target matches scoped entry", v3.allowed === true && v3.matched === "2001:db8::1", JSON.stringify(v3));
-const v4 = await tool("scope_remove", { entry: "2001:db8::1" });
+const v2 = await tool("scope_add", { entry: "2606:4700:4700::1111" });
+check("plain IPv6 entry accepted", !!v2.allow?.includes("2606:4700:4700::1111"), JSON.stringify(v2));
+const v3 = await tool("scope_check", { target: "http://[2606:4700:4700::1111]:8080" });
+check("IPv6 target matches scoped entry", v3.allowed === true && v3.matched === "2606:4700:4700::1111", JSON.stringify(v3));
+const v4 = await tool("scope_remove", { entry: "2606:4700:4700::1111" });
 check("IPv6 entry removable", v4.removed === true, JSON.stringify(v4));
 
 // cleanup
