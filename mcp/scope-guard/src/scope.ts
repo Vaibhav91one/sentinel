@@ -26,10 +26,19 @@ export type TargetClass =
   | "public"
   | "unresolvable_input";
 
+export interface TemporaryEntry {
+  entry: string;
+  expires_at: number;
+}
+
 export interface ScopeState {
   allow: string[];
+  temporary?: TemporaryEntry[];
   updated_at: string;
 }
+
+const MAX_TEMPORARY = 5;
+const MAX_TTL_MINUTES = 60;
 
 const DEFAULT_ALLOW = ["localhost", "127.0.0.1", "::1"];
 
@@ -125,6 +134,48 @@ export class Scope {
     return [...this.state.allow];
   }
 
+  /**
+   * Self-expiring entry for autonomous lab-bootstrap flows (package repos,
+   * CDNs). Same validation as add(), plus capacity + TTL caps so an agent
+   * cannot accumulate a standing widening of the fence.
+   */
+  addTemporary(entry: string, ttlMinutes: number): string | null {
+    const normalized = normalizeEntry(entry);
+    if (normalized === null) return `not a valid scope entry: "${entry}"`;
+    const cls = classify(normalized);
+    if (cls !== "public") return `refused: temporary entries may only be public hosts (got ${cls})`;
+    if (!(ttlMinutes > 0) || ttlMinutes > MAX_TTL_MINUTES)
+      return `refused: ttl must be 1-${MAX_TTL_MINUTES} minutes`;
+    this.pruneTemporary();
+    if ((this.state.temporary?.length ?? 0) >= MAX_TEMPORARY)
+      return `refused: temporary limit (${MAX_TEMPORARY}) reached - wait for expiry or prune`;
+    if (this.state.allow.includes(normalized)) return `"${normalized}" is already permanently scoped`;
+    if ((this.state.temporary ?? []).some((t) => t.entry === normalized)) return `"${normalized}" is already temporarily scoped`;
+    this.state.temporary = [
+      ...(this.state.temporary ?? []),
+      { entry: normalized, expires_at: Date.now() + ttlMinutes * 60_000 },
+    ];
+    this.state.updated_at = new Date().toISOString();
+    this.save();
+    return null;
+  }
+
+  private pruneTemporary(): void {
+    const live = (this.state.temporary ?? []).filter((t) => t.expires_at > Date.now());
+    if (live.length !== (this.state.temporary?.length ?? 0)) {
+      this.state.temporary = live;
+      this.save();
+    }
+  }
+
+  temporaryList(): { entry: string; expires_at: string }[] {
+    this.pruneTemporary();
+    return (this.state.temporary ?? []).map((t) => ({
+      entry: t.entry,
+      expires_at: new Date(t.expires_at).toISOString(),
+    }));
+  }
+
   /** Returns error message when the entry is refused, null when accepted. */
   add(entry: string): string | null {
     const normalized = normalizeEntry(entry);
@@ -204,11 +255,20 @@ export class Scope {
       return { allowed: false, reason: "HARD DENY: reserved/non-routable address", target_class: cls };
     }
 
+    this.pruneTemporary();
     let matched: string | undefined;
     for (const entry of this.state.allow) {
       if (matches(entry, normalized)) {
         matched = entry;
         break;
+      }
+    }
+    if (!matched) {
+      for (const t of this.state.temporary ?? []) {
+        if (matches(t.entry, normalized)) {
+          matched = t.entry;
+          break;
+        }
       }
     }
     if (!matched) {

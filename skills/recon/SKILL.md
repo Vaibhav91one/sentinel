@@ -41,21 +41,25 @@ node /tmp/sentinel/target/vuln-app.mjs &        # serves 127.0.0.1:3000 inside t
 curl -s -m 5 http://localhost:3000/ | head -20  # confirm it is up
 ```
 
-**Option B — real platform (OWASP Juice Shop), deterministic script:**
+**Option B — any operator-provided app (generic runner):**
 
 ```bash
 git clone --depth 1 https://github.com/Vaibhav91one/sentinel /tmp/sentinel
-bash /tmp/sentinel/sandbox-setup/juice-shop.sh   # downloads release, boots, polls up to 4 min
-cat /tmp/js_status.txt                           # "READY http://localhost:3000" or "FAILED <reason>"
-tail -30 /tmp/js.log                             # read this ONLY if status is FAILED
+bash /tmp/sentinel/sandbox-setup/serve-app.sh "<source>" [port]   # git URL, dir, .zip/.tgz
+cat /tmp/lab_status.txt                                           # READY ... or FAILED <reason>
 ```
 
-Run the script, then check `/tmp/js_status.txt`. If `READY`, treat
-`http://localhost:3000` as the target (`localhost` is default-scoped). If
-`FAILED`, report the reason from the status file and stop — do NOT improvise
-alternative install paths; that is what caused past failures.
+Works with anything that has a package.json, requirements.txt, or static files -
+Juice Shop, DVWA-style apps, an internal service clone, a raw directory.
+Read `/tmp/lab_status.txt`. On `READY`, treat `http://localhost:<port>` as the
+target. On `FAILED`, report the reason and stop - do NOT improvise alternative
+install paths; that is what caused past failures. If bootstrap needs package
+repos or CDNs, authorize them with `scope_add_temporary` (autonomous,
+self-expiring) - never permanent `scope_add` without explicit human approval.
 
-Both options keep scanner + target co-located inside one disposable cloud VM.
+Examples: Juice Shop release zip, your own microservice repo, any internal
+tool source the operator hands over. Scanner + target stay co-located in one
+disposable cloud VM regardless of stack.
 
 ## Phase 1 — passive fingerprint (no approval needed)
 

@@ -114,6 +114,35 @@ function buildServer(): McpServer {
   );
 
   server.registerTool(
+    "scope_add_temporary",
+    {
+      title: "Add temporary bootstrap scope",
+      description:
+        "AUTONOMOUS (no human pause): add a SELF-EXPIRING public-host entry for lab/bootstrap plumbing "
+        + "(package repos, CDNs, download hosts). Caps: max 5 live entries, TTL <= 60 minutes, public class only. "
+        + "Permanent widening still requires the approval-gated scope_add.",
+      inputSchema: {
+        entry: z.string().describe("Public hostname to authorize temporarily"),
+        ttl_minutes: z.number().int().min(1).max(60).optional().describe("Lifetime in minutes (default 30)"),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    ({ entry, ttl_minutes }) => {
+      const ttl = ttl_minutes ?? 30;
+      const error = scope.addTemporary(entry, ttl);
+      audit.append({
+        actor: "agent",
+        auth: AUTH_MODE,
+        action: "scope_add_temporary",
+        args: { entry, ttl_minutes: ttl },
+        verdict: error ? "denied" : "mutated",
+        reason: error ?? `temporary entry added (${ttl} min)`,
+      });
+      return text(error === null ? { added: entry, expires_in_minutes: ttl, temporary: scope.temporaryList() } : { error });
+    },
+  );
+
+  server.registerTool(
     "scope_add",
     {
       title: "Add scope entry",
@@ -341,7 +370,7 @@ function buildServer(): McpServer {
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    () => text({ allow: scope.list(), file: scope.file }),
+    () => text({ allow: scope.list(), temporary: scope.temporaryList(), file: scope.file }),
   );
 
   server.registerTool(
@@ -367,6 +396,7 @@ function buildServer(): McpServer {
       text({
         rules: [
           "every outbound contact requires a prior allowed scope_check",
+          "lab-bootstrap hosts may be added autonomously via scope_add_temporary (public only, max 5, self-expiring <=60min); permanent widening always needs a human",
           "public-scoped hostnames are DNS-resolved at check time; resolution into private/link-local space is denied as a rebinding attempt",
           "residual risk: the target may re-resolve between scope_check and the actual connection - check-time resolution narrows but does not eliminate rebinding; an egress proxy is the complete fix (roadmap)",
           "cloud metadata endpoints (169.254.169.254, metadata.google.internal) are hard-denied, including by DNS resolution",
