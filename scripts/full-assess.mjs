@@ -72,8 +72,10 @@ async function runTurn(input) {
   }
 }
 
-await runTurn([{ type: "user.message", content:
-  `Assess the demo target end to end using the sentinel-recon skill's Phase 0 in-sandbox lab: clone the repo inside the sandbox, start the vulnerable app on localhost:3000 there, then scope_check it, passive fingerprint, request approval for an active port sweep + web probes. Then correlate CVEs with the osv tools and produce the findings report.` }]);
+const PROMPT = process.env.ASSESS_PROMPT ??
+  `Assess the demo target end to end using the sentinel-recon skill's Phase 0 in-sandbox lab: clone the repo inside the sandbox, start the vulnerable app on localhost:3000 there, then scope_check it, passive fingerprint, request approval for an active port sweep + web probes. Then correlate CVEs with the osv tools and produce the findings report.`;
+
+await runTurn([{ type: "user.message", content: PROMPT }]);
 
 while (pending.length > 0) {
   const id = pending.shift();
