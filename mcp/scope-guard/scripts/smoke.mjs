@@ -108,6 +108,30 @@ const t4b = await tool("scope_check", { target: "http://100.64.99.99" });
 check("unscoped reserved literal (CGNAT) denied", t4b.allowed === false && t4b.target_class === "reserved", JSON.stringify(t4b));
 
 // Offline: IPv6 literal entries round-trip ("[::1]" canonicalizes onto default-scoped "::1")
+// Offline: IPv4-mapped IPv6 must be judged by its embedded IPv4
+const m1 = await tool("scope_add", { entry: "::ffff:169.254.169.254" });
+check(
+  "mapped-v6 metadata entry refused",
+  typeof m1.error === "string" && m1.error.includes("hard-denied"),
+  JSON.stringify(m1),
+);
+const m2 = await tool("scope_check", { target: "http://[::ffff:169.254.169.254]/" });
+check("mapped-v6 metadata target hard-denied", m2.allowed === false && m2.target_class === "cloud_metadata", JSON.stringify(m2));
+const m3 = await tool("scope_check", { target: "http://[::ffff:10.0.0.5]" });
+check("mapped-v6 private target denied unscoped", m3.allowed === false && m3.target_class === "private", JSON.stringify(m3));
+const m4 = await tool("scope_check", { target: "http://[::ffff:127.0.0.1]" });
+check("mapped-v6 loopback classified loopback", m4.target_class === "loopback", JSON.stringify(m4));
+
+// Offline: hostname:port entries round-trip
+const p1 = await tool("scope_add", { entry: "example.com:8443" });
+check("host:port entry accepted", !!p1.allow?.includes("example.com:8443"), JSON.stringify(p1));
+const p2 = await tool("scope_check", { target: "https://example.com:8443" });
+check("matching port allowed", p2.allowed === true && p2.matched === "example.com:8443", JSON.stringify(p2));
+const p3 = await tool("scope_check", { target: "https://example.com:8080" });
+check("different port denied", p3.allowed === false, JSON.stringify(p3));
+await tool("scope_remove", { entry: "example.com:8443" });
+
+// Offline: IPv6 literal entries round-trip ("[::1]" canonicalizes onto default-scoped "::1")
 const v1 = await tool("scope_add", { entry: "[::1]" });
 check(
   "bracketed IPv6 entry parsed",

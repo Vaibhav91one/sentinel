@@ -226,10 +226,12 @@ function normalizeEntry(entry: string): string | null {
   if (/^\[[0-9a-f:]+\](?::\d{1,5})?$/i.test(s)) {
     return s.slice(1, s.indexOf("]")).toLowerCase();
   }
+  if (/^::ffff:\d{1,3}(\.\d{1,3}){3}$/i.test(s)) return s.toLowerCase(); // mapped-v6 dotted
   if (/^[0-9a-f:]+$/i.test(s) && (s.match(/:/g)?.length ?? 0) >= 2) {
     return s.toLowerCase();
   }
-  if (/^[\w.-]+$/i.test(s)) return s.toLowerCase(); // host or host:port
+  if (/^[\w.-]+:\d{1,5}$/i.test(s)) return s.toLowerCase(); // host:port
+  if (/^[\w.-]+$/i.test(s)) return s.toLowerCase(); // host
   return null;
 }
 
@@ -267,8 +269,31 @@ function normalizeTarget(target: string): { value: string; display: string } | n
 }
 
 /** Loose classification without DNS resolution; input is already host[:port]. */
+/** Decode an IPv4-mapped IPv6 literal (dotted or hex tail) to plain IPv4, else null. */
+function unwrapMappedV6(host: string): string | null {
+  const m = /^::ffff:(.+)$/i.exec(host);
+  if (!m) return null;
+  const tail = m[1];
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return tail;
+  const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(tail);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  return null;
+}
+
 function classify(hostPort: string): TargetClass {
-  const host = splitHostPort(hostPort).host;
+  let host = splitHostPort(hostPort).host;
+  // IPv4-mapped IPv6 ("::ffff:169.254.169.254", "::ffff:a9fe:a9fe") must be
+  // judged by its embedded IPv4 address, otherwise it sails past every v4
+  // tripwire as "public". Hex tails we cannot decode are treated as reserved.
+  const mappedTail = /^::ffff:/i.test(host) ? unwrapMappedV6(host) : null;
+  if (/^::ffff:/i.test(host)) {
+    if (mappedTail === null) return "reserved";
+    host = mappedTail;
+  }
   if (host === "169.254.169.254" || host === "metadata.google.internal") return "cloud_metadata";
   if (host === "localhost" || host.endsWith(".localhost")) return "loopback";
   if (isIPv4(host)) {
