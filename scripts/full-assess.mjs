@@ -5,7 +5,11 @@
  * Usage: node scripts/full-assess.mjs [--deny]
  */
 import { TrueForge } from "@truefoundry/trueforge-sdk";
+import { Agent, setGlobalDispatcher } from "undici";
 import { balance, checkpoint } from "./usage.mjs";
+
+// Long sandbox operations go minutes without SSE bytes - kill the idle timers.
+setGlobalDispatcher(new Agent({ bodyTimeout: 0, headersTimeout: 0 }));
 
 const SPEND_FLOOR = Number(process.env.SPEND_FLOOR ?? 1.0); // user cap: stop when $4 spent (balance < $1)
 
@@ -23,15 +27,50 @@ if (!process.argv.includes("--no-spend-check")) {
   console.log(`[drive] spend check ok: $${b.toFixed(2)} available`);
 }
 
-const { data: session } = await client.sessions.create({ agent: { name: "sentinel" } });
-console.log(`[drive] session ${session.id} (auto=${AUTO})`);
+let session;
+if (process.env.RESUME_SESSION) {
+  session = { id: process.env.RESUME_SESSION };
+  console.log(`[drive] resuming session ${session.id} (auto=${AUTO})`);
+} else {
+  const created = await client.sessions.create({ agent: { name: "sentinel" } });
+  session = { id: created.data.id };
+  console.log(`[drive] session ${session.id} (auto=${AUTO})`);
+}
 
 const pending = [];
 const pendingResp = [];
 
+async function waitForTurnQuiet(turnIdHint) {
+  // Stream died mid-turn; poll events until a fresh turn.done shows up.
+  for (let i = 0; i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 10000));
+    try {
+      const d = await (await fetch(`${process.env.TRUEFORGE_BASE_URL ?? "http://localhost:8790"}/api/v1/sessions/${session.id}/events`)).json();
+      const evs = d.data ?? [];
+      const done = evs.find((e) => e.event?.type === "turn.done");
+      if (done) {
+        const ra = done.event?.state?.required_actions ?? [];
+        return { done: true, required: ra };
+      }
+    } catch { /* keep polling */ }
+  }
+  return { done: false, required: [] };
+}
+
 async function runTurn(input) {
-  const stream = await client.sessions.createTurnStream(session.id, { input });
-  for await (const { data: event } of stream.withMetadata()) {
+  let stream;
+  try {
+    stream = await client.sessions.createTurnStream(session.id, { input });
+  } catch (err) {
+    if (/timeout|terminated|Body/i.test(String(err?.cause ?? err))) {
+      console.log("  [drive] stream dropped; polling server-side turn…");
+      const q = await waitForTurnQuiet();
+      pending.push(...(q.required.flatMap((r) => (r.tool_calls ?? []).map((c) => c.id))));
+      return;
+    }
+    throw err;
+  }
+  for await (const { data: event } of (stream.withMetadata ? stream.withMetadata() : stream)) {
     switch (event.type) {
       case "tool.call":
         console.log(`  [tool] ${event.name ?? event.tool_name ?? "?"}`, JSON.stringify(event.arguments ?? {}).slice(0, 120));
@@ -87,7 +126,7 @@ async function runTurn(input) {
 const PROMPT = process.env.ASSESS_PROMPT ??
   `Assess the demo target end to end using the sentinel-recon skill's Phase 0 in-sandbox lab: clone the repo inside the sandbox, start the vulnerable app on localhost:3000 there, then scope_check it, passive fingerprint, request approval for an active port sweep + web probes. Then correlate CVEs with the osv tools and produce the findings report.`;
 
-await runTurn([{ type: "user.message", content: PROMPT }]);
+await runTurn([{ type: "user.message", content: process.env.RESUME_MESSAGE ?? PROMPT }]);
 
 // Alternate until both queues drain: harness may surface questions and
 // approvals interleaved across resumes.

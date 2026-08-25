@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@truefoundry/trueforge": "0.1.4",
-    "@truefoundry/trueforge-sdk": "^0.1.0"
+    "@truefoundry/trueforge-sdk": "^0.1.0",
+    "undici": "^8.10.0"
   },
   "devDependencies": {
     "tsx": "^4.20.0",
