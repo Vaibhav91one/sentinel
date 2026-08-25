@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import dns from "node:dns/promises";
 
 /**
  * Scope policy for Sentinel.
@@ -21,6 +22,7 @@ export type TargetClass =
   | "private"
   | "link_local"
   | "cloud_metadata"
+  | "reserved"
   | "public"
   | "unresolvable_input";
 
@@ -29,14 +31,39 @@ export interface ScopeState {
   updated_at: string;
 }
 
-const DEFAULT_ALLOW = ["localhost", "127.0.0.1", "[::1]"];
+const DEFAULT_ALLOW = ["localhost", "127.0.0.1", "::1"];
+
+/** IPv4 CIDRs that may never appear in the allowlist, directly or via overlap. */
+const BANNED_V4_CIDRS = [
+  "0.0.0.0/8", // this-network
+  "100.64.0.0/10", // CGNAT
+  "169.254.0.0/16", // link-local / cloud metadata
+  "192.0.0.0/24", // IETF protocol assignments
+  "192.0.2.0/24", // TEST-NET-1
+  "192.88.99.0/24", // 6to4 relay anycast (deprecated)
+  "198.18.0.0/15", // benchmarking
+  "198.51.100.0/24", // TEST-NET-2
+  "203.0.113.0/24", // TEST-NET-3
+  "224.0.0.0/4", // multicast
+  "240.0.0.0/4", // reserved (incl. broadcast)
+];
 
 export class Scope {
   readonly file: string;
   private state: ScopeState;
 
-  constructor(file: string) {
+  private lookup: (host: string) => Promise<{ address: string }[]>;
+
+  /**
+   * `lookup` is injectable so unit tests can drive DNS outcomes
+   * (rebinding, mixed answers, NXDOMAIN) without a network.
+   */
+  constructor(
+    file: string,
+    lookup: (host: string) => Promise<{ address: string }[]> = (h) => dns.lookup(h, { all: true }),
+  ) {
     this.file = file;
+    this.lookup = lookup;
     this.state = this.load();
   }
 
@@ -45,10 +72,48 @@ export class Scope {
     try {
       const parsed = JSON.parse(readFileSync(this.file, "utf8")) as Partial<ScopeState>;
       if (!Array.isArray(parsed.allow)) throw new Error("allow is not an array");
-      return { allow: parsed.allow.map(String), updated_at: String(parsed.updated_at ?? new Date().toISOString()) };
+      // Persisted entries are untrusted (hand-edited or written by an older
+      // version): re-run every add()-time check and drop violations.
+      const valid: string[] = [];
+      const rejected: string[] = [];
+      for (const raw of parsed.allow.map(String)) {
+        const err = this.validateEntry(raw);
+        if (err) {
+          rejected.push(`${raw} (${err})`);
+          continue;
+        }
+        const canonical = normalizeEntry(raw)!;
+        if (!valid.includes(canonical)) valid.push(canonical);
+      }
+      const state: ScopeState = {
+        allow: valid,
+        updated_at: String(parsed.updated_at ?? new Date().toISOString()),
+      };
+      if (rejected.length > 0) {
+        console.warn(`[scope] quarantined ${rejected.length} invalid persisted entr${rejected.length === 1 ? "y" : "ies"}:`);
+        for (const r of rejected) console.warn(`[scope]   - ${r}`);
+        writeFileSync(this.file, JSON.stringify(state, null, 2) + "\n"); // persist the sanitized policy
+      }
+      return state;
     } catch (err) {
       throw new Error(`scope file ${this.file} is corrupt: ${(err as Error).message}`);
     }
+  }
+
+  /** Same rules as add(), without mutating state. Returns error message or null. */
+  private validateEntry(raw: string): string | null {
+    const normalized = normalizeEntry(raw);
+    if (normalized === null) return "not a valid entry";
+    const cls = classify(normalized);
+    if (cls === "cloud_metadata") return "cloud metadata endpoint";
+    if (cls === "link_local") return "link-local address";
+    if (cls === "reserved") return "reserved/non-routable range";
+    if (entryHostIncludesSlash(normalized)) {
+      for (const banned of BANNED_V4_CIDRS) {
+        if (cidrOverlaps(normalized, banned)) return `overlaps hard-denied ${banned}`;
+      }
+    }
+    return null;
   }
 
   private save(): void {
@@ -64,8 +129,36 @@ export class Scope {
   add(entry: string): string | null {
     const normalized = normalizeEntry(entry);
     if (normalized === null) return `not a valid scope entry: "${entry}"`;
-    if (classify(normalized) === "cloud_metadata") {
+    const cls = classify(normalized);
+    if (cls === "cloud_metadata") {
       return `refused: cloud metadata endpoints are hard-denied and cannot be allow-listed`;
+    }
+    if (cls === "link_local") {
+      return `refused: link-local space (169.254.0.0/16, fe80::/10) is hard-denied and cannot be allow-listed`;
+    }
+    if (cls === "reserved") {
+      return `refused: reserved/non-routable ranges are hard-denied and cannot be allow-listed`;
+    }
+    // A CIDR that overlaps link-local or metadata space would silently
+    // authorize those addresses through a seemingly innocuous range.
+    if (entryHostIncludesSlash(normalized)) {
+      for (const banned of [
+        "0.0.0.0/8", // this-network
+        "100.64.0.0/10", // CGNAT
+        "169.254.0.0/16", // link-local / cloud metadata
+        "192.0.0.0/24", // IETF protocol assignments
+        "192.0.2.0/24", // TEST-NET-1
+        "198.18.0.0/15", // benchmarking
+        "192.88.99.0/24", // 6to4 relay anycast (deprecated)
+        "198.51.100.0/24", // TEST-NET-2
+        "203.0.113.0/24", // TEST-NET-3
+        "224.0.0.0/4", // multicast
+        "240.0.0.0/4", // reserved (incl. broadcast)
+      ]) {
+        if (cidrOverlaps(normalized, banned)) {
+          return `refused: CIDR ${normalized} overlaps hard-denied ${banned}`;
+        }
+      }
     }
     if (this.state.allow.includes(normalized)) return `"${normalized}" is already scoped`;
     this.state.allow.push(normalized);
@@ -87,7 +180,15 @@ export class Scope {
     return false;
   }
 
-  check(target: string): { allowed: boolean; reason: string; target_class: TargetClass; matched?: string } {
+  /**
+   * Async because public hostnames are DNS-resolved at check time: an
+   * allow-listed name that resolves into private/link-local space is treated
+   * as a DNS-rebinding attempt and denied. IP-literal targets, CIDR entries
+   * and unresolvable names skip resolution (fail-closed on the last case).
+   */
+  async check(
+    target: string,
+  ): Promise<{ allowed: boolean; reason: string; target_class: TargetClass; matched?: string }> {
     const normalized = normalizeTarget(target);
     if (normalized === null) {
       return { allowed: false, reason: `unparseable target "${target}"`, target_class: "unresolvable_input" };
@@ -96,16 +197,99 @@ export class Scope {
     if (cls === "cloud_metadata") {
       return { allowed: false, reason: "HARD DENY: cloud metadata endpoint", target_class: cls };
     }
+    if (cls === "link_local") {
+      return { allowed: false, reason: "HARD DENY: link-local address", target_class: cls };
+    }
+    if (cls === "reserved") {
+      return { allowed: false, reason: "HARD DENY: reserved/non-routable address", target_class: cls };
+    }
+
+    let matched: string | undefined;
     for (const entry of this.state.allow) {
       if (matches(entry, normalized)) {
-        return { allowed: true, reason: `matches scoped entry "${entry}"`, target_class: cls, matched: entry };
+        matched = entry;
+        break;
       }
     }
-    return {
-      allowed: false,
-      reason: `no scope entry matches "${normalized.display}" — add it via scope_add or pick an in-scope target`,
-      target_class: cls,
-    };
+    if (!matched) {
+      return {
+        allowed: false,
+        reason: `no scope entry matches "${normalized.display}" — add it via scope_add or pick an in-scope target`,
+        target_class: cls,
+      };
+    }
+
+    const host = splitHostPort(normalized.value).host;
+    const entryHost = splitHostPort(matched).host;
+    const needsResolution = !isIP(host) && !entryHost.includes("/");
+    if (!needsResolution) {
+      return { allowed: true, reason: `matches scoped entry "${matched}"`, target_class: cls, matched };
+    }
+
+    let addresses: string[];
+    try {
+      addresses = (await this.lookup(host))
+        .map((a) => a.address)
+        .filter((a) => typeof a === "string" && a.length > 0);
+    } catch {
+      return {
+        allowed: false,
+        reason: `fail-closed: scoped hostname "${host}" did not resolve`,
+        target_class: "unresolvable_input",
+        matched,
+      };
+    }
+    if (addresses.length === 0) {
+      return {
+        allowed: false,
+        reason: `fail-closed: scoped hostname "${host}" resolved to zero usable addresses`,
+        target_class: "unresolvable_input",
+        matched,
+      };
+    }
+
+    const resolvedClasses = new Set(addresses.map((a) => classify(a)));
+    if (resolvedClasses.has("cloud_metadata")) {
+      return {
+        allowed: false,
+        reason: `DNS rebinding guard: "${host}" resolves to a cloud metadata address (${addresses.join(", ")})`,
+        target_class: "cloud_metadata",
+        matched,
+      };
+    }
+    if (
+      resolvedClasses.has("link_local") ||
+      resolvedClasses.has("reserved")
+    ) {
+      return {
+        allowed: false,
+        reason: `DNS rebinding guard: "${host}" resolves to link-local/reserved space (${addresses.join(", ")})`,
+        target_class: "link_local",
+        matched,
+      };
+    }
+    // Public-scoped names must not silently become internal targets...
+    if (cls === "public" && (resolvedClasses.has("private") || resolvedClasses.has("loopback"))) {
+      return {
+        allowed: false,
+        reason: `DNS rebinding guard: public-scoped "${host}" resolves to private address (${addresses.join(", ")}) — scope the IP/CIDR explicitly instead`,
+        target_class: "private",
+        matched,
+      };
+    }
+    // ...and internally-scoped names must not silently become public ones.
+    if (
+      (cls === "private" || cls === "loopback") &&
+      resolvedClasses.has("public")
+    ) {
+      return {
+        allowed: false,
+        reason: `class mismatch guard: "${cls}"-scoped "${host}" resolves to public address (${addresses.join(", ")})`,
+        target_class: "public",
+        matched,
+      };
+    }
+    return { allowed: true, reason: `matches scoped entry "${matched}"`, target_class: cls, matched };
   }
 }
 
@@ -113,8 +297,63 @@ function normalizeEntry(entry: string): string | null {
   const s = entry.trim();
   if (s.length === 0 || s.length > 253) return null;
   if (/^\*\.[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)) return s.toLowerCase(); // wildcard domain
-  if (/^[\w.-]+(:\d{1,5})?$/i.test(s)) return s.toLowerCase(); // host[:port]
-  return null; // CIDR/IP fall through to same loose host check; strict IP/CIDR parsing happens in matches()
+  const cidr = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(s);
+  if (cidr) {
+    const octets = cidr.slice(1, 5).map(Number);
+    const bits = Number(cidr[5]);
+    if (octets.every((o) => o <= 255) && bits <= 32) return s; // strict IPv4 CIDR
+    return null;
+  }
+  // IPv6 literal, optionally bracketed and with a port: "::1", "[::1]", "[::1]:8080".
+  // Bracketed entries keep their port ("[v6]:p"); bare v6 stores no port
+  // (unbracketed v6-with-port is ambiguous and rejected).
+  const bracketed = /^\[([0-9a-f:]+)\](?::(\d{1,5}))?$/i.exec(s);
+  if (bracketed) {
+    if (!parseIPv6(bracketed[1])) return null;
+    const base = canonicalV6(bracketed[1].toLowerCase());
+    if (bracketed[2] !== undefined) {
+      const p = Number(bracketed[2]);
+      if (p < 1 || p > 65535) return null;
+      return `[${base}]:${p}`;
+    }
+    return base;
+  }
+  if (/^::ffff:\d{1,3}(\.\d{1,3}){3}$/i.test(s)) return s.toLowerCase(); // mapped-v6 dotted
+  if (/^[0-9a-f:]+$/i.test(s) && (s.match(/:/g)?.length ?? 0) >= 2) {
+    return canonicalV6(s.toLowerCase());
+  }
+  if (/^[\w.-]+:\d{1,5}$/i.test(s)) {
+    const p = Number(s.match(/:(\d{1,5})$/)![1]);
+    if (p < 1 || p > 65535) return null;
+    return s.toLowerCase();
+  }
+  if (/^[\w.-]+$/i.test(s)) return s.toLowerCase(); // host
+  return null;
+}
+
+function isIP(host: string): boolean {
+  return isIPv4(host) || host.includes(":");
+}
+
+function entryHostIncludesSlash(entry: string): boolean {
+  return entry.includes("/");
+}
+
+/** True when two IPv4 CIDRs share at least one address. */
+function cidrOverlaps(a: string, b: string): boolean {
+  const toInt = (s: string): number => s.split(".").reduce((acc, o) => (acc << 8) + Number(o), 0) >>> 0;
+  const [aBase, aBits] = a.split("/");
+  const [bBase, bBits] = b.split("/");
+  const mask = (bits: number): number => (bits === 0 ? 0 : (0xffffffff << (32 - Number(bits))) >>> 0);
+  const aI = toInt(aBase), bI = toInt(bBase);
+  const m = Number(aBits) <= Number(bBits) ? mask(Number(aBits)) : mask(Number(bBits));
+  return (aI & m) === (bI & m);
+}
+
+/** Public wrapper for canonical host[:port] normalization used by grant bookkeeping. */
+export function normalizeTargetValue(target: string): string | null {
+  const n = normalizeTarget(target);
+  return n ? n.value : null;
 }
 
 function normalizeTarget(target: string): { value: string; display: string } | null {
@@ -132,24 +371,124 @@ function normalizeTarget(target: string): { value: string; display: string } | n
 }
 
 /** Loose classification without DNS resolution; input is already host[:port]. */
+/** Decode an IPv4-mapped IPv6 literal (dotted or hex tail) to plain IPv4, else null. */
+function unwrapMappedV6(host: string): string | null {
+  const m = /^::ffff:(.+)$/i.exec(host);
+  if (!m) return null;
+  const tail = m[1];
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return tail;
+  const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(tail);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  return null;
+}
+
+/** Parse an IPv6 literal (no brackets/port/zone) into its 8 hextet groups, else null. */
+export function parseIPv6(s: string): number[] | null {
+  if (!s.includes(":") || !/^[0-9a-f:.]+$/i.test(s)) return null;
+  const doubleColons = s.match(/::/g)?.length ?? 0;
+  if (doubleColons > 1) return null;
+  // Embedded dotted-quad tails ("x:x:x:x:x:x:1.2.3.4") are rejected here;
+  // mapped-v6 must arrive in ::ffff: form and is unwrapped earlier.
+  const parts = s.split(":");
+  if (parts.some((p) => p.includes("."))) return null; // embedded v4 tail rejected
+  let head: string[] = parts;
+  let tail: string[] = [];
+  if (doubleColons === 1) {
+    const idx = s.indexOf("::");
+    const headStr = s.slice(0, idx);
+    const tailStr = s.slice(idx + 2);
+    head = headStr === "" ? [] : headStr.split(":");
+    tail = tailStr === "" ? [] : tailStr.split(":");
+    if (head.some((p) => p === "") || tail.some((p) => p === "")) return null;
+  }
+  if (head.length + tail.length > 8) return null;
+  const missing = 8 - (head.length + tail.length);
+  if (!s.includes("::") && missing !== 0) return null;
+  if (![...head, ...tail].every((g) => /^[0-9a-f]{1,4}$/i.test(g))) return null; // hextets max ffff
+  const groups = [...head, ...Array<string>(missing).fill("0"), ...tail].map((g) => parseInt(g || "0", 16));
+  return groups.some((g) => Number.isNaN(g)) ? null : groups;
+}
+
+/** Canonical lowercase form of an IPv6 literal ("0:0:..:1" -> "::1"), or the input unchanged. */
+export function canonicalV6(host: string): string {
+  const g = parseIPv6(host);
+  if (!g) return host;
+  // RFC 5952-style: first longest zero run becomes "::"
+  let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+  for (let i = 0; i < 8; i++) {
+    if (g[i] === 0) { if (curStart === -1) curStart = i; curLen++; if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; } }
+    else curStart = -1, curLen = 0;
+  }
+  if (bestLen < 2) return g.map((n) => n.toString(16)).join(":");
+  const head = g.slice(0, bestStart).map((n) => n.toString(16)).join(":");
+  const tail = g.slice(bestStart + bestLen).map((n) => n.toString(16)).join(":");
+  return `${head}::${tail}`;
+}
+
 function classify(hostPort: string): TargetClass {
-  const host = hostPort.replace(/:\d{1,5}$/, "").replace(/^\[|\]$/g, "");
+  let host = splitHostPort(hostPort).host;
+  // IPv4-mapped IPv6 ("::ffff:169.254.169.254", "::ffff:a9fe:a9fe") must be
+  // judged by its embedded IPv4 address, otherwise it sails past every v4
+  // tripwire as "public". Hex tails we cannot decode are treated as reserved.
+  const mappedTail = /^::ffff:/i.test(host) ? unwrapMappedV6(host) : null;
+  if (/^::ffff:/i.test(host)) {
+    if (mappedTail === null) return "reserved";
+    host = mappedTail;
+  }
   if (host === "169.254.169.254" || host === "metadata.google.internal") return "cloud_metadata";
   if (host === "localhost" || host.endsWith(".localhost")) return "loopback";
   if (isIPv4(host)) {
-    const [a, b] = host.split(".").map(Number);
+    const [a, b, c] = host.split(".").map(Number);
     if (a === 127) return "loopback";
     if (a === 169 && b === 254) return "link_local";
+    if (a === 0 || a >= 224) return "reserved"; // this-network, multicast, reserved
+    if (a === 100 && b >= 64 && b <= 127) return "reserved"; // CGNAT 100.64.0.0/10
+    if (a === 198 && (b === 18 || b === 19)) return "reserved"; // benchmarking 198.18.0.0/15
+    if (a === 192 && b === 0 && c === 2) return "reserved"; // TEST-NET-1
+    if (a === 198 && b === 51) return "reserved"; // TEST-NET-2
+    if (a === 203 && b === 0 && c === 113) return "reserved"; // TEST-NET-3
+    if (a === 192 && b === 88 && c === 99) return "reserved"; // 192.88.99.0/24
+    if (a === 192 && b === 0 && c === 0) return "reserved"; // 192.0.0.0/24 IETF protocol assignments
     if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) return "private";
     return "public";
   }
   if (host.includes(":")) {
-    if (host === "::1") return "loopback";
-    if (/^f[cd]/.test(host)) return "private";
-    if (/^fe[89ab]/.test(host)) return "link_local";
+    const g = parseIPv6(host);
+    if (!g) return "reserved"; // colon-string we cannot parse: fail closed
+    if (g.every((n) => n === 0)) return "reserved"; // unspecified ::/128
+    if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0 && g[6] === 0 && g[7] === 1)
+      return "loopback";
+    if ((g[0] & 0xffc0) === 0xfe80) return "link_local"; // fe80::/10
+    if ((g[0] & 0xfe00) === 0xfc00) return "private"; // fc00::/7 ULA
+    if (g[0] >= 0xff00) return "reserved"; // multicast ff00::/8 and beyond
+    if (g[0] === 0x2001 && g[1] === 0x0db8) return "reserved"; // documentation
     return "public";
   }
   return /\.local$/.test(host) ? "private" : "public";
+}
+
+/**
+ * Split host[:port] without mangling IPv6 literals ("::1" is a host, not
+ * "host : port"). Bracketed forms "[::1]" / "[::1]:8080" are unwrapped.
+ */
+export function splitHostPort(s: string): { host: string; port?: string } {
+  const x = s.trim();
+  if (x.startsWith("[")) {
+    const close = x.indexOf("]");
+    if (close !== -1) {
+      const host = x.slice(1, close);
+      const port = x.slice(close + 1).match(/^:(\d{1,5})$/)?.[1];
+      return { host, port };
+    }
+  }
+  if (/^[0-9a-f:]+$/i.test(x) && (x.match(/:/g)?.length ?? 0) >= 2) return { host: canonicalV6(x.toLowerCase()) }; // bare IPv6
+  const m = /^([\w.-]+):(\d{1,5})$/.exec(x);
+  if (m) return { host: m[1].toLowerCase(), port: m[2] };
+  return { host: x.toLowerCase() };
 }
 
 function isIPv4(s: string): boolean {
@@ -157,20 +496,17 @@ function isIPv4(s: string): boolean {
   return m !== null && m.slice(1).every((o) => Number(o) <= 255);
 }
 
-function matches(entry: string, target: { value: string }): boolean {
-  const host = target.value.replace(/:\d{1,5}$/, "");
-  const port = target.value.match(/:(\d{1,5})$/)?.[1];
 
-  // host[:port] entry: port must match when specified on the entry
-  const entryPort = entry.match(/:(\d{1,5})$/)?.[1];
-  const entryHost = entry.replace(/:\d{1,5}$/, "");
+function matches(entry: string, target: { value: string }): boolean {
+  // v6 targets come through URL.hostname bracketed ("[::1]:80"); entries are stored bare.
+  const { host, port } = splitHostPort(target.value);
+  const { host: entryHost, port: entryPort } = splitHostPort(entry);
 
   if (entryHost.includes("/")) return isIPv4(host) && cidrContains(entryHost, host); // CIDR
   if (entryHost.startsWith("*.")) {
     const suffix = entryHost.slice(1); // ".example.com"
     return host.endsWith(suffix) && host.length > suffix.length;
   }
-  if (isIPv4(entryHost) || entryHost.includes(":")) return entryHost === host && (entryPort === undefined || entryPort === port);
   return entryHost === host && (entryPort === undefined || entryPort === port);
 }
 

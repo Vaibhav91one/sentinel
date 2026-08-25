@@ -4,12 +4,40 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { Scope, defaultScopeFile } from "./scope.js";
+import { Scope, defaultScopeFile, normalizeTargetValue } from "./scope.js";
 import { Audit, defaultAuditFile } from "./audit.js";
 
 const NAME = "sentinel-scope-guard";
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const PORT = Number(process.env.PORT ?? 9930);
+
+/**
+ * When GUARD_TOKEN is set, every /mcp request must present it as a Bearer
+ * token. This is what stops anything except the TrueForge harness (which
+ * stores the same value in the connector's header-auth config) from minting
+ * grants or editing the allowlist. Unset = open, for local dev only.
+ */
+const GUARD_TOKEN = process.env.GUARD_TOKEN;
+
+/**
+ * REQUIRE_GUARD_TOKEN=1 makes the human-approval invariant fail closed:
+ * without a verified harness caller (bearer token), request_intrusive_approval
+ * refuses to mint grants at all instead of trusting that the harness pause
+ * happened. Default is warn-only so local development stays friction-free.
+ */
+const REQUIRE_GUARD_TOKEN = process.env.REQUIRE_GUARD_TOKEN === "1";
+
+/**
+ * When true (REQUIRE_GUARD_TOKEN=1 set but no GUARD_TOKEN configured) the
+ * harness-only invariant cannot hold, so EVERY allowlist mutation and grant
+ * mint fails closed - not just grants.
+ */
+function failClosed(): boolean {
+  return REQUIRE_GUARD_TOKEN && !GUARD_TOKEN;
+}
+
+const FAIL_CLOSED_MSG =
+  "fail-closed deployment: REQUIRE_GUARD_TOKEN=1 requires GUARD_TOKEN to be set so only the TrueForge harness connector can mutate policy.";
 
 const scope = new Scope(defaultScopeFile());
 const audit = new Audit(defaultAuditFile());
@@ -33,9 +61,17 @@ function mintGrant(target: string, action: string): string {
 export function consumeGrant(token: string, target: string): { valid: boolean; reason: string } {
   const g = grants.get(token);
   if (!g) return { valid: false, reason: "unknown grant token" };
+  if (Date.now() > g.expires_at) {
+    grants.delete(token); // expired tokens are garbage-collected on first touch
+    return { valid: false, reason: "grant expired" };
+  }
+  // A wrong-target attempt does NOT burn the grant: typos by the approved
+  // caller should not force a fresh human approval. Only a matching
+  // (token, target) pair consumes the single use.
+  if (g.target !== target) {
+    return { valid: false, reason: `grant was issued for ${g.target}, not ${target} (grant remains active)` };
+  }
   grants.delete(token);
-  if (Date.now() > g.expires_at) return { valid: false, reason: "grant expired" };
-  if (g.target !== target) return { valid: false, reason: `grant was issued for ${g.target}, not ${target}` };
   return { valid: true, reason: `human-approved grant for "${g.action}" on ${g.target}` };
 }
 
@@ -55,8 +91,8 @@ function buildServer(): McpServer {
       inputSchema: { target: z.string().describe("Host, URL or IP to check, e.g. http://localhost:3000") },
       annotations: { readOnlyHint: true },
     },
-    ({ target }) => {
-      const verdict = scope.check(target);
+    async ({ target }) => {
+      const verdict = await scope.check(target);
       audit.append({
         actor: "agent",
         action: "scope_check",
@@ -77,7 +113,11 @@ function buildServer(): McpServer {
       inputSchema: { entry: z.string().describe("Scope entry to add") },
       annotations: { destructiveHint: true },
     },
-    ({ entry }) => {
+    async ({ entry }) => {
+      if (failClosed()) {
+        audit.append({ actor: "agent", action: "scope_add", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
+        return text({ error: FAIL_CLOSED_MSG });
+      }
       const error = scope.add(entry);
       audit.append({
         actor: "human-via-agent",
@@ -98,7 +138,11 @@ function buildServer(): McpServer {
       inputSchema: { entry: z.string().describe("Exact scope entry to remove") },
       annotations: { destructiveHint: true },
     },
-    ({ entry }) => {
+    async ({ entry }) => {
+      if (failClosed()) {
+        audit.append({ actor: "agent", action: "scope_remove", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
+        return text({ error: FAIL_CLOSED_MSG });
+      }
       const removed = scope.remove(entry);
       audit.append({
         actor: "human-via-agent",
@@ -117,16 +161,16 @@ function buildServer(): McpServer {
       title: "Request intrusive-scan approval",
       description:
         "Call BEFORE any active/intrusive action against a target (port scans, exploit probes, brute force, fuzzing). "
-        + "Verifies the target is in scope, then returns a single-use grant token that must be included in the scan command as SENTINEL_GRANT=<token>. "
-        + "This call pauses for human approval in the harness before it runs.",
+        + "The harness pauses this call for explicit human Allow/Deny before it executes; on approval the guard verifies the target is in scope and mints a single-use consent token (embed as SENTINEL_GRANT=<token>). "
+        + "CONSENT BOOKKEEPING, NOT network enforcement: nothing yet blocks a command that omits the token (roadmap: egress proxy). Grants are scoped to host[:port] only - scheme and path are not part of the binding.",
       inputSchema: {
         target: z.string().describe("The exact target the intrusive action will touch"),
         action: z.string().describe("Short label of the action, e.g. 'nmap full port sweep'"),
       },
       annotations: { destructiveHint: true },
     },
-    ({ target, action }) => {
-      const verdict = scope.check(target);
+    async ({ target, action }) => {
+      const verdict = await scope.check(target);
       if (!verdict.allowed) {
         audit.append({
           actor: "agent",
@@ -137,15 +181,42 @@ function buildServer(): McpServer {
         });
         return text({ approved: false, grant_token: null, reason: verdict.reason });
       }
-      const token = mintGrant(target, action);
+      if (REQUIRE_GUARD_TOKEN && !GUARD_TOKEN) {
+        audit.append({
+          actor: "agent",
+          action: "intrusive_request",
+          args: { target, action },
+          verdict: "denied",
+          reason: "fail-closed: REQUIRE_GUARD_TOKEN=1 but no GUARD_TOKEN configured - harness-only invariant cannot be verified",
+        });
+        return text({
+          approved: false,
+          grant_token: null,
+          reason:
+            "fail-closed deployment: REQUIRE_GUARD_TOKEN=1 requires a shared bearer token so only the TrueForge harness connector can mint grants. Configure GUARD_TOKEN on the guard and the same value as header auth on the harness connector.",
+        });
+      }
+      const canonicalTarget = normalizeTargetValue(target) ?? target;
+      const token = mintGrant(canonicalTarget, action);
       audit.append({
         actor: "human-via-agent",
         action: "intrusive_request",
-        args: { target, action, grant: token },
+        // fingerprint only - audit_read must never expose redeemable grant material
+        args: { target: canonicalTarget, action, grant: `${token.slice(0, 8)}…` },
         verdict: "allowed",
-        reason: `in-scope; one-time grant minted (expires in ${GRANT_TTL_MS / 60000} min); human decision recorded by harness`,
+        reason: `human Allow/Deny enforced upstream by the harness checkpoint on this call; in-scope verified, single-use grant minted (${GRANT_TTL_MS / 60000} min)${GUARD_TOKEN ? "" : "; WARNING: no GUARD_TOKEN set - boundary open to local callers"}`,
       });
-      return text({ approved: true, grant_token: token, expires_in_minutes: GRANT_TTL_MS / 60000, note: "single-use; embed as SENTINEL_GRANT=<token> in the command" });
+      const result: Record<string, unknown> = {
+        approved: true,
+        grant_token: token,
+        expires_in_minutes: GRANT_TTL_MS / 60000,
+        note: "single-use; embed as SENTINEL_GRANT=<token> in the command and confirm with verify_grant (network-layer enforcement is roadmap)",
+      };
+      if (!GUARD_TOKEN) {
+        result.warning =
+          "no GUARD_TOKEN configured: any local caller could reach this endpoint. Set GUARD_TOKEN here and header auth on the harness connector for production posture.";
+      }
+      return text(result);
     },
   );
 
@@ -218,6 +289,35 @@ function buildServer(): McpServer {
   );
 
   server.registerTool(
+    "verify_grant",
+    {
+      title: "Verify intrusive-scan grant",
+      description:
+        "Consumes a single-use grant token for a target. Returns valid:false on reuse, expiry, or target mismatch (host[:port] scope - scheme/path are not part of the binding). "
+        + "This is consent bookkeeping; see policy_get for the enforcement roadmap.",
+      inputSchema: {
+        token: z.string().describe("The SENTINEL_GRANT value returned by request_intrusive_approval"),
+        target: z.string().describe("The exact target the grant was issued for"),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async ({ token, target }) => {
+      const requested = normalizeTargetValue(target) ?? target;
+      const result = consumeGrant(token, requested);
+      const g = result.valid ? null : undefined;
+      void g;
+      audit.append({
+        actor: "agent",
+        action: "grant_verify",
+        args: { target: requested, token: `${token.slice(0, 8)}…` },
+        verdict: result.valid ? "allowed" : "denied",
+        reason: result.reason,
+      });
+      return text({ ...result, bound_target: requested });
+    },
+  );
+
+  server.registerTool(
     "scope_list",
     {
       title: "List scope",
@@ -251,8 +351,12 @@ function buildServer(): McpServer {
       text({
         rules: [
           "every outbound contact requires a prior allowed scope_check",
-          "cloud metadata endpoints (169.254.169.254, metadata.google.internal) are hard-denied",
-          "intrusive actions require a human-approved single-use grant (request_intrusive_approval) and are additionally gated by the harness checkpoint",
+          "public-scoped hostnames are DNS-resolved at check time; resolution into private/link-local space is denied as a rebinding attempt",
+          "residual risk: the target may re-resolve between scope_check and the actual connection - check-time resolution narrows but does not eliminate rebinding; an egress proxy is the complete fix (roadmap)",
+          "cloud metadata endpoints (169.254.169.254, metadata.google.internal) are hard-denied, including by DNS resolution",
+          "link-local space is hard-denied, including CIDR entries that overlap it",
+          "intrusive actions: the TrueForge harness pauses request_intrusive_approval for a human Allow/Deny BEFORE it executes; the minted grant is CONSENT BOOKKEEPING ONLY - it is not yet enforced at the network/command layer (roadmap: egress proxy)",
+          "trust boundary: set GUARD_TOKEN here + header auth on the harness connector so ONLY the harness can call this server; REQUIRE_GUARD_TOKEN=1 fails closed ALL policy mutations (add/remove/grants) when that invariant cannot be verified",
           "all decisions land in the append-only audit log (audit_read)",
         ],
         allow_size: scope.list().length,
@@ -286,6 +390,21 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
   }
 
   if (req.method === "POST" && (req.url === "/mcp" || req.url?.startsWith("/mcp?"))) {
+    if (GUARD_TOKEN) {
+      const auth = req.headers.authorization ?? "";
+      const expected = `Bearer ${GUARD_TOKEN}`;
+      if (auth !== expected) {
+        audit.append({
+          actor: String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "unknown"),
+          action: "auth",
+          args: { url: req.url },
+          verdict: "denied",
+          reason: "missing or wrong bearer token on MCP endpoint",
+        });
+        res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+    }
     let body: unknown;
     try {
       body = await readBody(req);
@@ -321,4 +440,7 @@ httpServer.listen(PORT, "127.0.0.1", () => {
   console.log(`[${NAME}] listening on http://127.0.0.1:${PORT}/mcp`);
   console.log(`[${NAME}] scope file: ${scope.file} (${scope.list().length} entries)`);
   console.log(`[${NAME}] audit file: ${audit.file}`);
+  if (!GUARD_TOKEN) {
+    console.warn(`[${NAME}] WARNING: GUARD_TOKEN not set - any local process can call this server. Set it (and header auth on the TrueForge connector) for anything beyond local dev.`);
+  }
 });

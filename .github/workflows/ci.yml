@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm --filter @sentinel/scope-guard build
+
+      - name: Start scope-guard
+        run: |
+          node mcp/scope-guard/dist/index.js &
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:9930/healthz && exit 0
+            sleep 1
+          done
+          echo "scope-guard failed to start" >&2
+          exit 1
+
+      - name: Unit tests (policy + DNS branches, mocked resolver)
+        run: node --test mcp/scope-guard/scripts/scope.test.mjs
+
+      - name: Protocol smoke tests (network-independent)
+        run: SMOKE_SKIP_NETWORK=1 node mcp/scope-guard/scripts/smoke.mjs
+
+      - name: Auth + fail-closed integration tests
+        run: node mcp/scope-guard/scripts/auth-smoke.mjs
+
+      - name: Scope unit checks (deny-by-default)
+        run: |
+          result=$(curl -s -H content-type:application/json -H 'accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"scope_check","arguments":{"target":"https://example.com"}}}' \
+            http://127.0.0.1:9930/mcp)
+          echo "$result" > /tmp/resp.json
+          python3 - <<'EOF'
+          import json
+          outer = json.load(open("/tmp/resp.json"))
+          inner = json.loads(outer["result"]["content"][0]["text"])
+          assert inner["allowed"] is False, f"deny-by-default violated: {inner}"
+          print("deny-by-default holds:", inner["reason"])
+          EOF

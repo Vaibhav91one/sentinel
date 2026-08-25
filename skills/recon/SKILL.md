@@ -15,8 +15,10 @@ mechanical, not assumed: the scope-guard MCP server is the single source of trut
    touch the target and report why.
 2. Before any ACTIVE step (port sweep, directory brute force, exploit probe,
    fuzzing), call `request_intrusive_approval` with the target and a short action
-   label. If it returns a `grant_token`, embed it in every command of that phase:
-   `SENTINEL_GRANT=<token>`. If it returns `approved: false`, stop.
+   label. If it returns a `grant_token`, include it in every command of that
+   phase: `SENTINEL_GRANT=<token>`, and confirm it with `verify_grant` before
+   scanning. The token records human consent; network-layer enforcement of the
+   variable is roadmap. If the tool returns `approved: false`, stop.
 3. Never contact cloud metadata endpoints (169.254.169.254,
    metadata.google.internal). The guard hard-denies them; attempting anyway is a
    violation.
