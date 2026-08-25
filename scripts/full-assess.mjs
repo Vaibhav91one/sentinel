@@ -35,6 +35,15 @@ async function runTurn(input) {
       case "tool.call":
         console.log(`  [tool] ${event.name ?? event.tool_name ?? "?"}`, JSON.stringify(event.arguments ?? {}).slice(0, 120));
         break;
+      case "tool.response_required": {
+        const calls = event.toolCalls ?? event.tool_calls ?? [];
+        console.log(`  [question] agent asks user (${calls.length})`);
+        for (const c of calls) {
+          const cid = c.id ?? c.toolCallId ?? c.tool_call_id;
+          if (cid && !pendingResp.includes(cid)) pendingResp.push(cid);
+        }
+        break;
+      }
       case "tool.approval_required": {
         const calls = event.toolCalls ?? event.tool_calls ?? [];
         console.log(`  [approval] PAUSED - ${calls.length} call(s) need human`);
@@ -79,6 +88,11 @@ const PROMPT = process.env.ASSESS_PROMPT ??
 
 await runTurn([{ type: "user.message", content: PROMPT }]);
 
+while (pendingResp.length > 0) {
+  const id = pendingResp.shift();
+  console.log(`  [drive] answering question ${id}`);
+  await runTurn([{ type: "user.tool_response", threadId: "main", toolCallId: id, content: "Proceed. Make reasonable security-assessment choices autonomously and continue to the next phase." }]);
+}
 while (pending.length > 0) {
   // resolve ALL pending approvals in one batch - harness requires it
   const batch = pending.splice(0).map((cid) => ({
