@@ -44,6 +44,20 @@ console.log(JSON.stringify(await tool("scope_add", { entry: "*.evil.example" }))
 console.log("\n[5] metadata allowlist refusal (must refuse):");
 console.log(JSON.stringify(await tool("scope_add", { entry: "169.254.169.254" })));
 
+console.log("\n[5b] CIDR entry accepted + enforced:");
+console.log(JSON.stringify(await tool("scope_add", { entry: "10.50.0.0/24" })));
+console.log("  in-CIDR:", JSON.stringify(await tool("scope_check", { target: "http://10.50.0.7:8080" })));
+console.log("  off-CIDR:", JSON.stringify(await tool("scope_check", { target: "http://10.50.1.7" })));
+console.log(JSON.stringify(await tool("scope_remove", { entry: "10.50.0.0/24" })));
+
+console.log("\n[5c] invalid CIDR refused:");
+console.log(JSON.stringify(await tool("scope_add", { entry: "999.10.0.0/40" })));
+
+console.log("\n[5d] DNS rebinding guard (public hostname resolving to loopback must deny):");
+await tool("scope_add", { entry: "localtest.me" });
+console.log("  check:", JSON.stringify(await tool("scope_check", { target: "http://localtest.me:3000" })));
+console.log(JSON.stringify(await tool("scope_remove", { entry: "localtest.me" })));
+
 console.log("\n[6] audit_read:");
 const audit = await tool("audit_read", { limit: 6 });
 for (const e of audit.entries) console.log(`  ${e.ts} ${e.action.padEnd(12)} ${e.verdict.padEnd(8)} ${e.reason}`);

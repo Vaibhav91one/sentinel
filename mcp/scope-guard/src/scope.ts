@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import dns from "node:dns/promises";
 
 /**
  * Scope policy for Sentinel.
@@ -87,7 +88,15 @@ export class Scope {
     return false;
   }
 
-  check(target: string): { allowed: boolean; reason: string; target_class: TargetClass; matched?: string } {
+  /**
+   * Async because public hostnames are DNS-resolved at check time: an
+   * allow-listed name that resolves into private/link-local space is treated
+   * as a DNS-rebinding attempt and denied. IP-literal targets, CIDR entries
+   * and unresolvable names skip resolution (fail-closed on the last case).
+   */
+  async check(
+    target: string,
+  ): Promise<{ allowed: boolean; reason: string; target_class: TargetClass; matched?: string }> {
     const normalized = normalizeTarget(target);
     if (normalized === null) {
       return { allowed: false, reason: `unparseable target "${target}"`, target_class: "unresolvable_input" };
@@ -96,16 +105,59 @@ export class Scope {
     if (cls === "cloud_metadata") {
       return { allowed: false, reason: "HARD DENY: cloud metadata endpoint", target_class: cls };
     }
+
+    let matched: string | undefined;
     for (const entry of this.state.allow) {
       if (matches(entry, normalized)) {
-        return { allowed: true, reason: `matches scoped entry "${entry}"`, target_class: cls, matched: entry };
+        matched = entry;
+        break;
       }
     }
-    return {
-      allowed: false,
-      reason: `no scope entry matches "${normalized.display}" — add it via scope_add or pick an in-scope target`,
-      target_class: cls,
-    };
+    if (!matched) {
+      return {
+        allowed: false,
+        reason: `no scope entry matches "${normalized.display}" — add it via scope_add or pick an in-scope target`,
+        target_class: cls,
+      };
+    }
+
+    const host = normalized.value.replace(/:\d{1,5}$/, "").replace(/^\[|\]$/g, "");
+    const entryHost = matched.replace(/:\d{1,5}$/, "");
+    const needsResolution = !isIP(host) && !entryHost.includes("/");
+    if (!needsResolution) {
+      return { allowed: true, reason: `matches scoped entry "${matched}"`, target_class: cls, matched };
+    }
+
+    let addresses: string[];
+    try {
+      addresses = (await dns.lookup(host, { all: true })).map((a) => a.address);
+    } catch {
+      return {
+        allowed: false,
+        reason: `fail-closed: scoped hostname "${host}" did not resolve`,
+        target_class: "unresolvable_input",
+        matched,
+      };
+    }
+
+    const resolvedClasses = new Set(addresses.map((a) => classify(a)));
+    if (resolvedClasses.has("cloud_metadata")) {
+      return {
+        allowed: false,
+        reason: `DNS rebinding guard: "${host}" resolves to a cloud metadata address (${addresses.join(", ")})`,
+        target_class: "cloud_metadata",
+        matched,
+      };
+    }
+    if (cls === "public" && (resolvedClasses.has("private") || resolvedClasses.has("loopback") || resolvedClasses.has("link_local"))) {
+      return {
+        allowed: false,
+        reason: `DNS rebinding guard: public-scoped "${host}" resolves to private address (${addresses.join(", ")}) — scope the IP/CIDR explicitly instead`,
+        target_class: "private",
+        matched,
+      };
+    }
+    return { allowed: true, reason: `matches scoped entry "${matched}"`, target_class: cls, matched };
   }
 }
 
@@ -113,8 +165,19 @@ function normalizeEntry(entry: string): string | null {
   const s = entry.trim();
   if (s.length === 0 || s.length > 253) return null;
   if (/^\*\.[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)) return s.toLowerCase(); // wildcard domain
+  const cidr = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(s);
+  if (cidr) {
+    const octets = cidr.slice(1, 5).map(Number);
+    const bits = Number(cidr[5]);
+    if (octets.every((o) => o <= 255) && bits <= 32) return s; // strict IPv4 CIDR
+    return null;
+  }
   if (/^[\w.-]+(:\d{1,5})?$/i.test(s)) return s.toLowerCase(); // host[:port]
-  return null; // CIDR/IP fall through to same loose host check; strict IP/CIDR parsing happens in matches()
+  return null;
+}
+
+function isIP(host: string): boolean {
+  return isIPv4(host) || host.includes(":");
 }
 
 function normalizeTarget(target: string): { value: string; display: string } | null {

@@ -35,11 +35,19 @@ at the policy layer, before any human ever sees a prompt.
 | Layer      | Control                                                                 |
 | ---------- | ----------------------------------------------------------------------- |
 | Policy     | `scope_check` gate: no contact with non-allowlisted hosts               |
-| Tripwire   | cloud metadata IPs denied even if someone allowlists them               |
+| Rebinding  | public-scoped hostnames are DNS-resolved at check time; resolution into private/link-local space is denied fail-closed |
+| Tripwire   | cloud metadata IPs hard-denied, literally or via DNS resolution          |
 | Human      | intrusive actions require an Allow click in the TrueForge UI            |
 | Token      | approved scans carry a single-use, 10-minute `SENTINEL_GRANT`           |
+| Auth       | optional `GUARD_TOKEN` bearer lock so only the harness connector can reach the guard |
 | Isolation  | all scanning runs in the TrueForge sandbox, never on the host           |
 | Forensics  | every decision appended to `data/audit.jsonl`, readable via `audit_read`|
+
+Known limits, stated honestly: the guard cannot see HTTP redirects made inside
+the sandbox (the recon skill forbids following them off-target), and the grant
+token is a procedural control — commands are expected to embed it, not forced
+by a network filter. Roadmap: sandbox-side egress proxy that drops packets
+without a valid token.
 
 **You are responsible for only scanning targets you own or have written
 permission to test.** The default scope is `localhost` so the demo target is
