@@ -33,6 +33,21 @@ export interface ScopeState {
 
 const DEFAULT_ALLOW = ["localhost", "127.0.0.1", "::1"];
 
+/** IPv4 CIDRs that may never appear in the allowlist, directly or via overlap. */
+const BANNED_V4_CIDRS = [
+  "0.0.0.0/8", // this-network
+  "100.64.0.0/10", // CGNAT
+  "169.254.0.0/16", // link-local / cloud metadata
+  "192.0.0.0/24", // IETF protocol assignments
+  "192.0.2.0/24", // TEST-NET-1
+  "192.88.99.0/24", // 6to4 relay anycast (deprecated)
+  "198.18.0.0/15", // benchmarking
+  "198.51.100.0/24", // TEST-NET-2
+  "203.0.113.0/24", // TEST-NET-3
+  "224.0.0.0/4", // multicast
+  "240.0.0.0/4", // reserved (incl. broadcast)
+];
+
 export class Scope {
   readonly file: string;
   private state: ScopeState;
@@ -57,10 +72,48 @@ export class Scope {
     try {
       const parsed = JSON.parse(readFileSync(this.file, "utf8")) as Partial<ScopeState>;
       if (!Array.isArray(parsed.allow)) throw new Error("allow is not an array");
-      return { allow: parsed.allow.map(String), updated_at: String(parsed.updated_at ?? new Date().toISOString()) };
+      // Persisted entries are untrusted (hand-edited or written by an older
+      // version): re-run every add()-time check and drop violations.
+      const valid: string[] = [];
+      const rejected: string[] = [];
+      for (const raw of parsed.allow.map(String)) {
+        const err = this.validateEntry(raw);
+        if (err) {
+          rejected.push(`${raw} (${err})`);
+          continue;
+        }
+        const canonical = normalizeEntry(raw)!;
+        if (!valid.includes(canonical)) valid.push(canonical);
+      }
+      const state: ScopeState = {
+        allow: valid,
+        updated_at: String(parsed.updated_at ?? new Date().toISOString()),
+      };
+      if (rejected.length > 0) {
+        console.warn(`[scope] quarantined ${rejected.length} invalid persisted entr${rejected.length === 1 ? "y" : "ies"}:`);
+        for (const r of rejected) console.warn(`[scope]   - ${r}`);
+        writeFileSync(this.file, JSON.stringify(state, null, 2) + "\n"); // persist the sanitized policy
+      }
+      return state;
     } catch (err) {
       throw new Error(`scope file ${this.file} is corrupt: ${(err as Error).message}`);
     }
+  }
+
+  /** Same rules as add(), without mutating state. Returns error message or null. */
+  private validateEntry(raw: string): string | null {
+    const normalized = normalizeEntry(raw);
+    if (normalized === null) return "not a valid entry";
+    const cls = classify(normalized);
+    if (cls === "cloud_metadata") return "cloud metadata endpoint";
+    if (cls === "link_local") return "link-local address";
+    if (cls === "reserved") return "reserved/non-routable range";
+    if (entryHostIncludesSlash(normalized)) {
+      for (const banned of BANNED_V4_CIDRS) {
+        if (cidrOverlaps(normalized, banned)) return `overlaps hard-denied ${banned}`;
+      }
+    }
+    return null;
   }
 
   private save(): void {

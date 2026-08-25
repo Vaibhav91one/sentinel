@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Scope } from "../dist/scope.js";
@@ -106,4 +106,33 @@ test("CIDR overlap with reserved space is refused", async () => {
   const ok = await s.add("203.0.113.0/24");
   // TEST-NET-3 is classified reserved via literal rules; CIDR form must refuse too
   assert.match(ok ?? "", /hard-denied|TEST|refused/, `203.0.113.0/24 unexpectedly accepted: ${ok}`);
+});
+
+test("persisted scope files are sanitized on load (quarantine bypass entries)", async () => {
+  const { writeFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "scope-load-"));
+  const file = join(dir, "scope.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      allow: ["localhost", "0.0.0.0/0", "169.254.1.1", "::1", "not a real entry!!", "10.50.77.0/24"],
+    }),
+  );
+  const warnings = [];
+  const orig = console.warn;
+  console.warn = (...args) => void warnings.push(args.join(" "));
+  const s = new Scope(file);
+  console.warn = orig;
+
+  assert.ok(s.list().includes("localhost"), "valid entry kept");
+  assert.ok(s.list().includes("::1"), "valid v6 entry kept");
+  assert.ok(s.list().includes("10.50.77.0/24"), "valid private CIDR kept");
+  assert.equal(s.list().includes("0.0.0.0/0"), false, "broad CIDR quarantined");
+  assert.equal(s.list().includes("169.254.1.1"), false, "link-local literal quarantined");
+  assert.equal(s.list().includes("not a real entry!!"), false, "garbage entry quarantined");
+  assert.ok(warnings.some((w) => w.includes("quarantined")), "quarantine is announced");
+
+  // sanitized policy persisted back to disk
+  const onDisk = JSON.parse(readFileSync(file, "utf8"));
+  assert.deepEqual(onDisk.allow, s.list());
 });
