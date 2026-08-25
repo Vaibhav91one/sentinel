@@ -67,12 +67,22 @@ fi
 # transport (an essential-package-repo domain).
 ensure_node22() {
   command -v node >/dev/null 2>&1 && { echo "[js] system node $(node -v)" >> "$LOG"; return 0; }
-  echo "[js] bootstrapping Node 22 via NodeSource" | tee -a "$STATUS" "$LOG"
-  export DEBIAN_FRONTEND=noninteractive
-  (curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-      && apt-get install -y nodejs) >>"$LOG" 2>&1 \
-    || { echo "FAILED node22 bootstrap failed" > "$STATUS"; tail -30 "$LOG" >> "$STATUS"; exit 1; }
-  node -v >> "$LOG"
+  # Official static tarball straight from nodejs.org (already in scope).
+  # No apt involvement -> zero dependency on unscoped Debian mirrors.
+  echo "[js] bootstrapping Node 22 from nodejs.org/dist" | tee -a "$STATUS" "$LOG"
+  local NV
+  NV=$(curl -fsSL https://nodejs.org/dist/index.json \
+       | grep -oE '"version":"v22\.[0-9]+\.[0-9]+"' | head -1 \
+       | grep -oE 'v[0-9.]+')
+  [ -n "$NV" ] || { echo "FAILED could not resolve Node 22 version" > "$STATUS"; exit 1; }
+  local f="node-$NV-linux-x64.tar.xz"
+  curl -fsSL "https://nodejs.org/dist/$NV/$f" -o "/tmp/$f" >>"$LOG" 2>&1 \
+    || { echo "FAILED nodejs.org download failed" > "$STATUS"; tail -30 "$LOG" >> "$STATUS"; exit 1; }
+  mkdir -p /opt/node22
+  tar xJf "/tmp/$f" -C /opt/node22 --strip-components=1 2>>"$LOG" || fail "tar extract failed"
+  export PATH="/opt/node22/bin:$PATH"
+  command -v node >/dev/null 2>&1 || fail "node binary did not run after extract"
+  echo "[js] using $(node -v) at /opt/node22" >> "$LOG"
 }
 
 ENTRY=$(find . -maxdepth 3 \( -path ./node_modules -o -path ./*/node_modules \) -prune -o -type f -name app.js -print 2>/dev/null | head -1)
