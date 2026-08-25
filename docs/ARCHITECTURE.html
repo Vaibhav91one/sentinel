@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel — Architecture</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --line: #30363d;
+    --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --green: #3fb950;
+    --amber: #d29922; --red: #f85149; --purple: #bc8cff;
+    --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", Inter, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.55; padding: 2rem; max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 1.9rem; letter-spacing: -0.02em; margin-bottom: .25rem; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--dim); margin-bottom: 2.5rem; font-size: .95rem; }
+  h2 { font-size: 1.15rem; margin: 2.5rem 0 1rem; padding-bottom: .4rem; border-bottom: 1px solid var(--line); color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-size: .85rem; }
+  h3 { font-size: .95rem; margin: 1.2rem 0 .5rem; color: var(--purple); }
+  p { margin-bottom: .8rem; color: var(--text); }
+  .dim { color: var(--dim); }
+  code { font-family: var(--mono); background: var(--panel2); padding: .1em .35em; border-radius: 4px; font-size: .85em; }
+  pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; overflow-x: auto; font-size: .78rem; line-height: 1.5; color: #c9d1d9; margin: .8rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: .8rem 0; font-size: .86rem; }
+  th, td { border: 1px solid var(--line); padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--dim); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+  tr:hover td { background: rgba(88,166,255,.04); }
+
+  /* diagram primitives */
+  .diagram { display: grid; gap: .8rem; margin: 1rem 0; }
+  .row { display: flex; gap: .8rem; align-items: stretch; justify-content: center; flex-wrap: wrap; }
+  .node { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .8rem 1rem; min-width: 150px; flex: 1; max-width: 260px; }
+  .node b { display: block; font-size: .88rem; margin-bottom: .25rem; }
+  .node small { color: var(--dim); font-size: .76rem; display: block; line-height: 1.45; }
+  .node.harness { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; max-width: none; }
+  .node.guard { border-color: var(--red); }
+  .node.sandbox { border-color: var(--green); }
+  .node.model { border-color: var(--purple); }
+  .arrow-row { display: flex; justify-content: center; gap: 4rem; color: var(--dim); font-family: var(--mono); font-size: .75rem; }
+  .arrow-down { text-align: center; color: var(--dim); font-size: 1rem; line-height: 1; }
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .6rem; margin: 1rem 0; counter-reset: step; }
+  .step { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: .7rem .9rem; font-size: .82rem; position: relative; counter-increment: step; }
+  .step::before { content: counter(step, decimal-leading-zero); font-family: var(--mono); color: var(--accent); font-weight: 700; display: block; margin-bottom: .3rem; font-size: .72rem; }
+  .step b { display: block; margin-bottom: .2rem; }
+  .step small { color: var(--dim); }
+  .badge { display: inline-block; font-family: var(--mono); font-size: .68rem; padding: .12em .5em; border-radius: 999px; border: 1px solid; margin-right: .3em; }
+  .b-green { color: var(--green); border-color: var(--green); }
+  .b-red { color: var(--red); border-color: var(--red); }
+  .b-amber { color: var(--amber); border-color: var(--amber); }
+  .b-blue { color: var(--accent); border-color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } body { padding: 1rem; } }
+  ul { margin: .4rem 0 .8rem 1.2rem; }
+  li { margin-bottom: .3rem; }
+  .kv { font-family: var(--mono); font-size: .8rem; color: var(--dim); }
+</style>
+</head>
+<body>
+
+<h1><span>Sentinel</span> · Architecture</h1>
+<div class="sub">Scope-enforced security recon agent on the TrueForge harness · Agent Harness Hackathon submission · <span class="kv">repo: github.com/Vaibhav91one/sentinel</span></div>
+
+<!-- ============ HIGH LEVEL ============ -->
+<h2>01 · High-level architecture</h2>
+<p>Four cooperating planes. The <b>harness</b> owns orchestration and human checkpoints. The <b>policy plane</b> (our TypeScript MCP server) owns authorization decisions and consent bookkeeping. The <b>execution plane</b> is a disposable cloud sandbox where both the scanner and the target live. The <b>enrichment plane</b> reaches CVE data that the sandbox's restricted egress cannot.</p>
+
+<pre>
+                       ┌─────────────────────────────────────────────────────────┐
+   user (chat / SDK) ─▶│                    TRUEFORGE HARNESS                    │
+                       │  model loop · tool routing · approvals · subagents      │
+                       │  session persistence (SQLite) · streaming UI :8790      │
+                       └──────┬──────────────────────┬───────────────┬───────────┘
+                              │ MCP (HTTP)           │ MCP (HTTP)    │ sandbox-as-tool
+                              ▼                      ▼               ▼
+                 ┌─────────────────────┐  ┌────────────────┐  ┌─────────────────────┐
+                 │  POLICY PLANE       │  │ ENRICHMENT     │  │ EXECUTION PLANE     │
+                 │  scope-guard        │  │ osv_query      │  │ Daytona cloud VM    │
+                 │  :9930/mcp          │  │ osv_get        │  │                     │
+                 │                     │  │ (host-side,    │  │ git clone sentinel  │
+                 │ · allowlist         │  │  full network) │  │ node vuln-app.mjs   │
+                 │ · hard-deny ranges  │  │                │  │ nmap / curl probes  │
+                 │ · grant mint+verify │  │ api.osv.dev    │  │ artifacts/*.jsonl   │
+                 │ · append-only audit │  │                │  │                     │
+                 └─────────────────────┘  └────────────────┘  └─────────────────────┘
+                        ▲                                        │ scanner + target
+                        │ consent tokens                         ▼ co-located, isolated
+                 data/scope.json                          ephemeral, destroyed after idle
+                 data/audit.jsonl
+</pre>
+
+<h3>Component responsibilities</h3>
+<table>
+<tr><th>Component</th><th>Owns</th><th>Never does</th></tr>
+<tr><td><b>TrueForge harness</b><br><span class="kv">npx @truefoundry/trueforge · :8790</span></td><td>Agent loop, model calls, tool routing, human Allow/Deny checkpoint UI, subagent fan-out, session persistence across restarts</td><td>Policy decisions — it delegates those to scope-guard</td></tr>
+<tr><td><b>Model</b><br><span class="kv">deepseek/deepseek-v4-flash via OpenAI-compatible API</span></td><td>Planning turns, choosing tools, writing report prose</td><td>Anything authoritative — every action re-validated by guard</td></tr>
+<tr><td><b>scope-guard</b><br><span class="kv">mcp/scope-guard · :9930/mcp</span></td><td>Allowlist verdicts, DNS rebinding defense, hard-deny tripwires, consent grants, audit log</td><td>Contact targets, run scans, resolve DNS for scanning (only for its own check)</td></tr>
+<tr><td><b>OSV tools</b><br><span class="kv">osv_query / osv_get (same MCP server)</span></td><td>CVE correlation against api.osv.dev from the host side</td><td>Run inside the sandbox — egress there is restricted by design</td></tr>
+<tr><td><b>Daytona sandbox</b><br><span class="kv">free tier, restricted egress</span></td><td>Isolated execution: clone repo, run target app, run scanners, write artifacts</td><td>Hold credentials — model/MCP keys stay in the harness</td></tr>
+<tr><td><b>Demo target</b><br><span class="kv">target/vuln-app.mjs</span></td><td>Predictable vulnerable surface (5 planted findings), zero dependencies, fake data only</td><td>Exist outside the sandbox during demos</td></tr>
+</table>
+
+<!-- ============ LIFECYCLE ============ -->
+<h2>02 · Assessment lifecycle (one full run)</h2>
+<div class="flow">
+  <div class="step"><b>Lab build</b><small>Sandbox provisions on first exec need. Agent clones repo from GitHub (allowlisted egress), installs Node, starts vuln-app on sandbox-localhost:3000.</small></div>
+  <div class="step"><b>Scope gate</b><small>Every contact preceded by <code>scope_check</code>. localhost matches default entry. Deny ⇒ no contact at all.</small></div>
+  <div class="step"><b>Passive recon</b><small>curl fingerprinting inside sandbox: banners, headers, link graph. No approval needed. Findings → <code>artifacts/*.recon.jsonl</code>.</small></div>
+  <div class="step"><b>Consent checkpoint</b><small><code>request_intrusive_approval</code> is annotated destructive ⇒ harness pauses turn, renders Allow/Deny card. Human decides.</small></div>
+  <div class="step"><b>Grant minted</b><small>On Allow: guard verifies scope again, mints single-use token (10-min TTL). Agent embeds <code>SENTINEL_GRANT=…</code> in active commands; confirms via verify_grant.</small></div>
+  <div class="step"><b>Active scan</b><small>nmap top-ports sweep + curated web probes (rate-limited). Evidence captured to artifacts, not pasted into chat.</small></div>
+  <div class="step"><b>CVE correlation</b><small>Host-side osv_query per versioned package; osv_get for detail. Reachability reasoning downgrades unverifiable advisories.</small></div>
+  <div class="step"><b>Report</b><small>Severity-ranked markdown + machine-readable JSON in artifacts. Audit log holds every decision end-to-end.</small></div>
+</div>
+
+<!-- ============ LOW LEVEL ============ -->
+<h2>03 · Low-level: scope-guard MCP server</h2>
+
+<div class="grid2">
+<div>
+<h3>Module map</h3>
+<pre>
+mcp/scope-guard/src/
+├── index.ts   HTTP server + MCP wiring + tools
+├── scope.ts   Scope class: load/save/add/remove/check,
+│              normalizeEntry/Target, classify, matches,
+│              cidrContains, parseIPv6, canonicalV6,
+│              splitHostPort, unwrapMappedV6, BANNED_V4_CIDRS
+├── audit.ts   Audit class: append-only JSONL, read(limit)
+scripts/
+├── smoke.mjs        assertive protocol tests (16 checks)
+├── auth-smoke.mjs   spawns 3 guards: 401s, fail-closed,
+│                    single-use grants, canonical targets
+└── scope.test.mjs   node:test unit suite (12 tests,
+                      injected DNS resolver)</pre>
+</div>
+<div>
+<h3>Transport &amp; process model</h3>
+<p>Stateless Streamable-HTTP MCP: one <code>McpServer</code> + one <code>StreamableHTTPServerTransport</code> (<code>sessionIdGenerator: undefined</code>) per POST — no sessions to leak, horizontal scaling trivial. Node <code>http.createServer</code>, no framework. Binds <code>127.0.0.1</code> only.</p>
+<p><b>Bearer gate:</b> when <code>GUARD_TOKEN</code> env is set, every POST must carry <code>Authorization: Bearer …</code>; mismatches get 401 <em>and an audit entry</em>. The same value lives in the TrueForge connector's header-auth config — that shared secret IS the trust boundary.</p>
+<p><b>Fail-closed posture:</b> <code>REQUIRE_GUARD_TOKEN=1</code> without a configured token blocks <i>all</i> mutations (add/remove/grants), not just grants.</p>
+</div>
+</div>
+
+<h3>Tool inventory (9 tools)</h3>
+<table>
+<tr><th>Tool</th><th>Type</th><th>Annotation → harness behavior</th><th>Notes</th></tr>
+<tr><td><code>scope_check</code></td><td>read</td><td><span class="badge b-green">readOnlyHint</span> runs autonomously</td><td>Mandatory before any contact. DNS-resolves public names; rebinding-aware. Audited.</td></tr>
+<tr><td><code>request_intrusive_approval</code></td><td>mutating</td><td><span class="badge b-red">destructiveHint</span> → harness pauses for human Allow/Deny</td><td>Mints single-use grant (10-min TTL) bound to canonical host[:port]. Refuses out-of-scope pre-human.</td></tr>
+<tr><td><code>verify_grant</code></td><td>state-mutating</td><td>no hint (cheap call)</td><td>Consumes token. Wrong-target ≠ burn. Reuse/expiry rejected. Returns bound_target.</td></tr>
+<tr><td><code>scope_add</code></td><td>mutating</td><td><span class="badge b-red">destructiveHint</span> → approval pause</td><td>Validates hostname[:port] · IPv4 · CIDR · bare/bracketed v6 · mapped-v6. Rejects reserved/link-local/metadata classes + overlapping CIDRs.</td></tr>
+<tr><td><code>scope_remove</code></td><td>mutating</td><td><span class="badge b-red">destructiveHint</span> → approval pause</td><td>Exact-entry removal after normalization.</td></tr>
+<tr><td><code>scope_list</code></td><td>read</td><td><span class="badge b-green">readOnlyHint</span></td><td>Canonical stored form + file path.</td></tr>
+<tr><td><code>audit_read</code></td><td>read</td><td><span class="badge b-green">readOnlyHint</span></td><td>Newest-first N entries. Grant material fingerprinted, never raw.</td></tr>
+<tr><td><code>policy_get</code></td><td>read</td><td><span class="badge b-green">readOnlyHint</span></td><td>Machine-readable rules incl. residual risks (TOCTOU, procedural token).</td></tr>
+<tr><td><code>osv_query / osv_get</code></td><td>read</td><td><span class="badge b-green">readOnlyHint</span> host-side fetch</td><td>POST api.osv.dev/v1/query · GET /v1/vulns/{id}. Exists because sandbox egress cannot reach OSV.</td></tr>
+</table>
+
+<h3>scope_check decision pipeline</h3>
+<pre>
+target string
+   │
+   ▼
+normalizeTarget()          URL-parse (scheme optional) → hostname + port [+ path for display]
+   │ null ⇒ DENY unparseable
+   ▼
+classify(host[:port])
+   ├─ cloud_metadata  ⇒ DENY (hard, never overridable)
+   ├─ link_local      ⇒ DENY (hard)
+   ├─ reserved        ⇒ DENY (hard)          ← 0/8 · 100.64/10 · 198.18/15 · TEST-NETs
+   │                                          ← 192.0.0/24 · 224/4 · 240/4 · ::/128
+   │                                          ← multicast ff00::/8 · doc 2001:db8::/32
+   ▼
+matches(allow[])?          exact host[:port] · IPv4 CIDR overlap · *.wildcard suffix
+   │ no match ⇒ DENY "no scope entry"
+   ▼
+needsResolution?           skip for IP literals and CIDR entries
+   │ yes ⇒ dns.lookup(all)
+   │   throw            ⇒ DENY fail-closed (NXDOMAIN etc.)
+   │   []               ⇒ DENY fail-closed (zero usable addresses)
+   ▼
+resolvedClasses = classify(each answer)
+   ├─ metadata ∨ link_local ∨ reserved  ⇒ DENY rebinding/tripwire
+   ├─ cls==public  ∧ (private|loopback) ⇒ DENY rebinding
+   ├─ cls!=public  ∧  public answer     ⇒ DENY class mismatch
+   ▼
+ALLOW · matched entry recorded · audit.append()
+</pre>
+
+<h3>Grant state machine</h3>
+<pre>
+                    request_intrusive_approval(target, action)
+                              │ scope.check fails? ──▶ DENIED (audited, no token exists)
+                              ▼
+                     [harness pause: Allow / Deny card]
+                              │ Deny ──▶ tool never executes
+                              ▼ Allow
+                     mintGrant(canonical_target, action)
+                     grants[token] = { target, action, expires_at: now+10min }
+                              │
+                              ▼
+             agent embeds SENTINEL_GRANT=<token> in commands
+                              │
+                              ▼
+                  verify_grant(token, target)          ← also callable ad hoc
+   unknown?            → invalid (no state change)
+   expired?            → delete + invalid
+   wrong target?       → invalid, GRANT KEPT (typo must not burn approval)
+   match               → DELETE + valid            ◀── single use consumed here
+</pre>
+<p class="dim">Honest boundary: consumption is bookkeeping. Nothing yet blocks a command that omits the variable — enforcement arrives with the planned sandbox-side egress proxy. Documented in README §known-limits and <code>policy_get</code>.</p>
+
+<!-- ============ DATA SCHEMAS ============ -->
+<h2>04 · Data schemas</h2>
+<div class="grid2">
+<div>
+<h3>data/scope.json</h3>
+<pre>
+{
+  "allow": [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "10.50.77.0/24",        // CIDR
+    "*.trycloudflare.com",  // wildcard domain
+    "[2606:4700::1111]:443" // bracketed v6 + port
+  ],
+  "updated_at": "2026-08-25T…"
+}
+</pre>
+<ul>
+<li>Loaded through the sanitizer: every entry re-passes add()-time validation; violating entries quarantined with a warning, sanitized policy written back.</li>
+<li>v6 stored canonically (RFC 5952 compression).</li>
+</ul>
+</div>
+<div>
+<h3>data/audit.jsonl</h3>
+<pre>
+{"ts":"2026-08-25T…","actor":"agent",
+ "action":"scope_check",
+ "args":{"target":"http://localhost:3000"},
+ "verdict":"allowed",
+ "reason":"matches scoped entry \"localhost\"" }
+
+{"ts":"…","actor":"human-via-agent",
+ "action":"intrusive_request",
+ "args":{"target":"…","action":"port sweep",
+         "grant":"b7d911f6…"},   // 8-char fingerprint only
+ "verdict":"allowed",
+ "reason":"human Allow/Deny enforced upstream …"}
+</pre>
+<p class="dim">Append-only. Actors: <code>agent</code> (autonomous), <code>human-via-agent</code> (post-checkpoint). Verdicts: allowed / denied / mutated.</p>
+</div>
+</div>
+
+<!-- ============ AGENT SPEC ============ -->
+<h2>05 · Agent definition</h2>
+<table>
+<tr><th>Field</th><th>Value</th><th>Why</th></tr>
+<tr><td>model</td><td><code>deepseek/deepseek-v4-flash</code> @ temp 0.2</td><td>$0.04/$0.08 per M tokens ≈ $0.01–0.05 per assessment; strong tool-calling</td></tr>
+<tr><td>mcp_servers</td><td><code>scope-guard</code> preload ON; <code>require_approval_for_tools: [request_intrusive_approval, scope_add, scope_remove]</code></td><td>Pause points declared declaratively; harness enforces them natively</td></tr>
+<tr><td>skills</td><td><code>sentinel-recon</code>, <code>sentinel-triage</code> (git-backed from this repo)</td><td>Playbooks versioned with the code they drive</td></tr>
+<tr><td>sandbox</td><td>enabled, file_downloads on (Daytona)</td><td>Skills + Code Mode require it; isolation story requires it</td></tr>
+<tr><td>capabilities</td><td>sub-agents ✓ generative-ui ✓ ask-user ✓ compaction ✓ large-response offload ✓ iteration_limit 80</td><td>Per-target fan-out; runaway safety stop</td></tr>
+</table>
+
+<!-- ============ TEST MATRIX ============ -->
+<h2>06 · Test matrix</h2>
+<table>
+<tr><th>Suite</th><th>Runner</th><th>Network</th><th>Covers</th></tr>
+<tr><td><code>scope.test.mjs</code></td><td><code>node --test</code></td><td>none (injected resolver)</td><td>Rebinding deny, metadata/mixed/NXDOMAIN/empty answers, class mismatch, canonicalization, mapped-v6, reserved literals, CIDR overlaps, scope-file quarantine</td></tr>
+<tr><td><code>smoke.mjs</code></td><td>plain node</td><td>opt-out via SMOKE_SKIP_NETWORK=1</td><td>Full MCP protocol over HTTP: initialize, all 9 tools, wildcard/port semantics, live localtest.me rebinding</td></tr>
+<tr><td><code>auth-smoke.mjs</code></td><td>spawns 3 guards</td><td>none</td><td>401 missing/wrong bearer, correct-token pass-through, REQUIRE_GUARD_TOKEN fail-closed on add/remove/grants, dev-mode warning, canonical grant targets, single-use consumption lifecycle</td></tr>
+<tr><td>GitHub Actions CI</td><td>ubuntu-latest</td><td>hermetic</td><td>pnpm build → unit tests → boot guard → hermetic smoke → deny-by-default assertion</td></tr>
+</table>
+<p class="dim">All suites exit non-zero on failure. CI cannot pass with a regressed policy layer.</p>
+
+<!-- ============ SECURITY CONTROLS ============ -->
+<h2>07 · Security control matrix</h2>
+<table>
+<tr><th>#</th><th>Control</th><th>Enforcement point</th><th>Status</th></tr>
+<tr><td>1</td><td>Allowlist-only targeting</td><td>scope_check (MCP, pre-contact)</td><td><span class="badge b-green">enforced</span></td></tr>
+<tr><td>2</td><td>DNS-rebinding defense</td><td>check-time resolution, class-consistency both directions</td><td><span class="badge b-green">enforced</span> <span class="badge b-amber">TOCTOU window documented</span></td></tr>
+<tr><td>3</td><td>Metadata/link-local/reserved tripwire</td><td>classify(): literal + resolved + CIDR overlap</td><td><span class="badge b-green">enforced</span></td></tr>
+<tr><td>4</td><td>Human approval for intrusive actions</td><td>TrueForge checkpoint (destructive annotation)</td><td><span class="badge b-green">enforced</span></td></tr>
+<tr><td>5</td><td>Single-use consent tokens</td><td>mint/consume lifecycle + verify_grant</td><td><span class="badge b-amber">bookkeeping</span> <span class="badge b-blue">network enforcement = roadmap</span></td></tr>
+<tr><td>6</td><td>Harness-only mutation access</td><td>GUARD_TOKEN bearer + REQUIRE_GUARD_TOKEN fail-closed mode</td><td><span class="badge b-green">enforced</span></td></tr>
+<tr><td>7</td><td>Execution isolation</td><td>Daytona sandbox-as-tool; secrets never enter sandbox</td><td><span class="badge b-green">enforced</span></td></tr>
+<tr><td>8</td><td>Immutable forensics</td><td>append-only audit.jsonl + audit_read</td><td><span class="badge b-green">enforced</span></td></tr>
+<tr><td>9</td><td>Policy persistence integrity</td><td>load-time sanitization/quarantine</td><td><span class="badge b-green">enforced</span></td></tr>
+</table>
+
+<!-- ============ REPO TREE ============ -->
+<h2>08 · Repository layout</h2>
+<pre>
+sentinel/
+├── README.md                  overview + judging-criteria mapping
+├── CONTRIBUTING.md            PR-only workflow, Qodo review expectations
+├── LICENSE                    MIT
+├── package.json               workspace root · trueforge pin + aws-sdk override
+├── pnpm-workspace.yaml
+├── mcp/scope-guard/
+│   ├── src/{index,scope,audit}.ts
+│   ├── scripts/{smoke,auth-smoke,scope.test}.mjs
+│   └── tsconfig.json
+├── skills/
+│   ├── recon/SKILL.md         phase-0 lab build · passive→grant-gated active flow
+│   └── triage/SKILL.md        OSV correlation · ranked report format
+├── agent/sentinel.agent.json  manifest applied via scripts/apply-agent.ts
+├── scripts/
+│   ├── apply-agent.ts         create-or-update agent via SDK
+│   ├── full-assess.mjs        scripted end-to-end driver w/ auto-approve + spend floor
+│   ├── usage.mjs              DeepSeek balance ledger + abort threshold
+│   └── e2e-smoke.mjs          minimal loop test
+├── target/
+│   ├── vuln-app.mjs           deliberately weak zero-dep demo app (fake data)
+│   └── run-target.sh
+├── docs/SETUP.md              reproducible setup guide
+├── demo/DEMO.md               3-minute recording script
+├── demo/BLOG-DRAFT.md         field-report draft
+├── demo/evidence/full-assessment-report.md   real captured run output
+└── .github/workflows/ci.yml
+</pre>
+
+<!-- ============ RUNBOOK ============ -->
+<h2>09 · Runbook</h2>
+<pre>
+# one-time
+pnpm install && pnpm build
+cp .env.example .env            # add DEEPSEEK_API_KEY (+ optional GUARD_TOKEN)
+
+# every session
+pnpm scope-guard &amp;              # policy plane   → http://127.0.0.1:9930/mcp
+pnpm harness                    # TrueForge      → http://localhost:8790
+
+# assess (scripted driver, auto-handles approval pauses)
+node --env-file=.env scripts/full-assess.mjs http://localhost:3000
+
+# watch money + decisions
+node --env-file=.env scripts/usage.mjs status
+tail -f data/audit.jsonl
+</pre>
+
+<p style="margin-top:3rem" class="dim kv">Sentinel · MIT · built for The Agent Harness Hackathon (WeMakeDevs × TrueFoundry × Qodo) · Aug 2026</p>
+
+</body>
+</html>
