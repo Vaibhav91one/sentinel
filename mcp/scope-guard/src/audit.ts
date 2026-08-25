@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 export interface AuditEntry {
   ts: string;
   actor: string;
+  auth?: string;
   action: string;
   args: Record<string, unknown>;
   verdict: "allowed" | "denied" | "mutated";
