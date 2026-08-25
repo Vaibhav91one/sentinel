@@ -61,26 +61,30 @@ fi
 
 # ---------- 3. locate a runtime ----------
 # Packaged builds usually bundle their own Node runtime; fall back to system node.
+# ---------- 3. guarantee a Node 22 runtime ----------
+# The packaged node_modules carry native modules built for Node 22; Debian apt
+# ships Node 18 whose ABI will not load them. NodeSource is the standard
+# transport (an essential-package-repo domain).
+ensure_node22() {
+  command -v node >/dev/null 2>&1 && { echo "[js] system node $(node -v)" >> "$LOG"; return 0; }
+  echo "[js] bootstrapping Node 22 via NodeSource" | tee -a "$STATUS" "$LOG"
+  export DEBIAN_FRONTEND=noninteractive
+  (curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+      && apt-get install -y nodejs) >>"$LOG" 2>&1 \
+    || { echo "FAILED node22 bootstrap failed" > "$STATUS"; tail -30 "$LOG" >> "$STATUS"; exit 1; }
+  node -v >> "$LOG"
+}
+
 ENTRY=$(find . -maxdepth 3 \( -path ./node_modules -o -path ./*/node_modules \) -prune -o -type f -name app.js -print 2>/dev/null | head -1)
 BUNDLED_NODE=$(find . -maxdepth 4 -type f -name node -path "*bin*" 2>/dev/null | head -1)
 
-if [ -x "./juice-shop" ]; then
-  RUN=(./juice-shop)
-elif [ -n "$BUNDLED_NODE" ] && [ -n "$ENTRY" ]; then
-  echo "[js] using bundled runtime: $BUNDLED_NODE" >> "$LOG"
-  RUN=("$BUNDLED_NODE" "$ENTRY")
-elif [ -n "$ENTRY" ]; then
-  command -v node >/dev/null 2>&1 || fail "no entrypoint runtime (system node missing)"
-  RUN=(node "$ENTRY")
-else
-  fail "no entrypoint found (no juice-shop bin, bundled node, or app.js)"
+if [ -z "$ENTRY" ]; then
+  fail "no entrypoint found (no app.js under unpacked release)"
 fi
+ensure_node22
+RUN=(node "$ENTRY")
 
-# ensure *a* node exists for the fallback paths
-if ! command -v node >/dev/null 2>&1 && [ -z "$NODE_BIN" ] && [ ! -x ./juice-shop ]; then
-  export DEBIAN_FRONTEND=noninteractive
-  (apt-get update -qq && apt-get install -y -qq nodejs) >>"$LOG" 2>&1 || fail "apt nodejs install failed"
-fi
+
 
 # ---------- 4. launch ----------
 echo "[js] launching: ${RUN[*]}" | tee -a "$STATUS" "$LOG"
