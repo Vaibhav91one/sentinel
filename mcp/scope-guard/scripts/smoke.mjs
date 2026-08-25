@@ -1,5 +1,22 @@
+/**
+ * Protocol + security smoke tests for the scope-guard MCP server.
+ * Asserts expected outcomes; exits non-zero on any failure so CI catches
+ * regressions in the policy layer.
+ *
+ * Usage: node scripts/smoke.mjs   (guard must be running on :9930)
+ */
 const BASE = process.env.BASE ?? "http://127.0.0.1:9930/mcp";
 let id = 0;
+let failures = 0;
+
+function check(label, cond, detail) {
+  if (cond) {
+    console.log(`  ok    ${label}`);
+  } else {
+    failures++;
+    console.log(`  FAIL  ${label} -> ${detail}`);
+  }
+}
 
 async function rpc(method, params) {
   const res = await fetch(BASE, {
@@ -18,7 +35,7 @@ async function rpc(method, params) {
 
 async function tool(name, args) {
   const r = await rpc("tools/call", { name, arguments: args });
-  if (r.error) return { error: r.error };
+  if (r.error) return { error: r.error.message ?? "rpc error" };
   return JSON.parse(r.result.content[0].text);
 }
 
@@ -27,40 +44,63 @@ const init = await rpc("initialize", {
   capabilities: {},
   clientInfo: { name: "smoke", version: "0" },
 });
-console.log("init ->", init.result.serverInfo);
+check("initialize returns server info", !!init?.result?.serverInfo?.name, JSON.stringify(init));
 
-console.log("\n[1] in-scope target:");
-console.log(JSON.stringify(await tool("scope_check", { target: "http://localhost:3000" })));
+const t1 = await tool("scope_check", { target: "http://localhost:3000" });
+check("loopback default-scoped is allowed", t1.allowed === true && t1.target_class === "loopback", JSON.stringify(t1));
 
-console.log("\n[2] cloud metadata (must hard-deny):");
-console.log(JSON.stringify(await tool("scope_check", { target: "http://169.254.169.254/latest/meta-data/" })));
+const t2 = await tool("scope_check", { target: "http://169.254.169.254/latest/meta-data/" });
+check("cloud metadata literal hard-denied", t2.allowed === false && t2.target_class === "cloud_metadata", JSON.stringify(t2));
 
-console.log("\n[3] out-of-scope public host:");
-console.log(JSON.stringify(await tool("scope_check", { target: "https://stripe.com" })));
+const t2b = await tool("scope_check", { target: "http://169.254.10.20" });
+check("other link-local addresses hard-denied", t2b.allowed === false && t2b.reason.includes("link-local"), JSON.stringify(t2b));
 
-console.log("\n[4] scope_add wildcard:");
-console.log(JSON.stringify(await tool("scope_add", { entry: "*.evil.example" })));
+const t3 = await tool("scope_check", { target: "https://stripe.com" });
+check("out-of-scope public host denied", t3.allowed === false && !t3.matched, JSON.stringify(t3));
 
-console.log("\n[5] metadata allowlist refusal (must refuse):");
-console.log(JSON.stringify(await tool("scope_add", { entry: "169.254.169.254" })));
+const a1 = await tool("scope_add", { entry: "*.nip.io" });
+check("wildcard entry accepted", !!a1.allow?.includes("*.nip.io"), JSON.stringify(a1));
+const a1b = await tool("scope_check", { target: "http://93.184.216.34.nip.io" });
+check("wildcard match allowed (resolvable public)", a1b.allowed === true && a1b.target_class === "public", JSON.stringify(a1b));
+const a1c = await tool("scope_check", { target: "http://nip.io" });
+check("bare domain not covered by wildcard", a1c.allowed === false, JSON.stringify(a1c));
 
-console.log("\n[5b] CIDR entry accepted + enforced:");
-console.log(JSON.stringify(await tool("scope_add", { entry: "10.50.0.0/24" })));
-console.log("  in-CIDR:", JSON.stringify(await tool("scope_check", { target: "http://10.50.0.7:8080" })));
-console.log("  off-CIDR:", JSON.stringify(await tool("scope_check", { target: "http://10.50.1.7" })));
-console.log(JSON.stringify(await tool("scope_remove", { entry: "10.50.0.0/24" })));
+const a2 = await tool("scope_add", { entry: "169.254.169.254" });
+check("metadata allowlist refusal", typeof a2.error === "string" && a2.error.includes("hard-denied"), JSON.stringify(a2));
 
-console.log("\n[5c] invalid CIDR refused:");
-console.log(JSON.stringify(await tool("scope_add", { entry: "999.10.0.0/40" })));
+const a3 = await tool("scope_add", { entry: "169.254.0.0/16" });
+check(
+  "link-local CIDR refusal",
+  typeof a3.error === "string" && a3.error.includes("hard-denied"),
+  JSON.stringify(a3),
+);
 
-console.log("\n[5d] DNS rebinding guard (public hostname resolving to loopback must deny):");
+const a4 = await tool("scope_add", { entry: "10.50.77.0/24" });
+check("valid CIDR accepted", !!a4.allow?.includes("10.50.77.0/24"), JSON.stringify(a4));
+const a4b = await tool("scope_check", { target: "http://10.50.77.9:8080" });
+check("in-CIDR target allowed", a4b.allowed === true && a4b.matched === "10.50.77.0/24", JSON.stringify(a4b));
+const a4c = await tool("scope_check", { target: "http://10.50.78.9" });
+check("off-CIDR target denied", a4c.allowed === false, JSON.stringify(a4c));
+
+const a5 = await tool("scope_add", { entry: "999.10.0.0/40" });
+check("invalid CIDR refused", typeof a5.error === "string" && a5.error.includes("not a valid"), JSON.stringify(a5));
+
+// public hostname resolving into loopback space -> rebinding guard
 await tool("scope_add", { entry: "localtest.me" });
-console.log("  check:", JSON.stringify(await tool("scope_check", { target: "http://localtest.me:3000" })));
-console.log(JSON.stringify(await tool("scope_remove", { entry: "localtest.me" })));
+const a6 = await tool("scope_check", { target: "http://localtest.me:3000" });
+check(
+  "DNS rebinding guard denies public name resolving to loopback",
+  a6.allowed === false && a6.reason.includes("rebinding"),
+  JSON.stringify(a6),
+);
+await tool("scope_remove", { entry: "localtest.me" });
 
-console.log("\n[6] audit_read:");
-const audit = await tool("audit_read", { limit: 6 });
-for (const e of audit.entries) console.log(`  ${e.ts} ${e.action.padEnd(12)} ${e.verdict.padEnd(8)} ${e.reason}`);
+// cleanup
+await tool("scope_remove", { entry: "*.nip.io" });
+await tool("scope_remove", { entry: "10.50.77.0/24" });
 
-console.log("\n[7] cleanup remove wildcard:");
-console.log(JSON.stringify(await tool("scope_remove", { entry: "*.evil.example" })));
+const audit = await tool("audit_read", { limit: 5 });
+check("audit log records entries", Array.isArray(audit.entries) && audit.entries.length > 0, JSON.stringify(audit).slice(0, 120));
+
+console.log(failures === 0 ? "\nALL SMOKE CHECKS PASSED" : `\n${failures} SMOKE CHECK(S) FAILED`);
+process.exit(failures === 0 ? 0 : 1);

@@ -65,8 +65,21 @@ export class Scope {
   add(entry: string): string | null {
     const normalized = normalizeEntry(entry);
     if (normalized === null) return `not a valid scope entry: "${entry}"`;
-    if (classify(normalized) === "cloud_metadata") {
+    const cls = classify(normalized);
+    if (cls === "cloud_metadata") {
       return `refused: cloud metadata endpoints are hard-denied and cannot be allow-listed`;
+    }
+    if (cls === "link_local") {
+      return `refused: link-local space (169.254.0.0/16, fe80::/10) is hard-denied and cannot be allow-listed`;
+    }
+    // A CIDR that overlaps link-local or metadata space would silently
+    // authorize those addresses through a seemingly innocuous range.
+    if (entryHostIncludesSlash(normalized)) {
+      for (const banned of ["169.254.0.0/16", "0.0.0.0/8"]) {
+        if (cidrOverlaps(normalized, banned)) {
+          return `refused: CIDR ${normalized} overlaps hard-denied ${banned}`;
+        }
+      }
     }
     if (this.state.allow.includes(normalized)) return `"${normalized}" is already scoped`;
     this.state.allow.push(normalized);
@@ -104,6 +117,9 @@ export class Scope {
     const cls = classify(normalized.value);
     if (cls === "cloud_metadata") {
       return { allowed: false, reason: "HARD DENY: cloud metadata endpoint", target_class: cls };
+    }
+    if (cls === "link_local") {
+      return { allowed: false, reason: "HARD DENY: link-local address", target_class: cls };
     }
 
     let matched: string | undefined;
@@ -178,6 +194,21 @@ function normalizeEntry(entry: string): string | null {
 
 function isIP(host: string): boolean {
   return isIPv4(host) || host.includes(":");
+}
+
+function entryHostIncludesSlash(entry: string): boolean {
+  return entry.includes("/");
+}
+
+/** True when two IPv4 CIDRs share at least one address. */
+function cidrOverlaps(a: string, b: string): boolean {
+  const toInt = (s: string): number => s.split(".").reduce((acc, o) => (acc << 8) + Number(o), 0) >>> 0;
+  const [aBase, aBits] = a.split("/");
+  const [bBase, bBits] = b.split("/");
+  const mask = (bits: number): number => (bits === 0 ? 0 : (0xffffffff << (32 - Number(bits))) >>> 0);
+  const aI = toInt(aBase), bI = toInt(bBase);
+  const m = Number(aBits) <= Number(bBits) ? mask(Number(aBits)) : mask(Number(bBits));
+  return (aI & m) === (bI & m);
 }
 
 function normalizeTarget(target: string): { value: string; display: string } | null {
