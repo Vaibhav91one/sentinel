@@ -39,6 +39,14 @@ function failClosed(): boolean {
 const FAIL_CLOSED_MSG =
   "fail-closed deployment: REQUIRE_GUARD_TOKEN=1 requires GUARD_TOKEN to be set so only the TrueForge harness connector can mutate policy.";
 
+/**
+ * Audit provenance (L1): every entry records how the caller was authenticated.
+ * bearer-verified = presented GUARD_TOKEN (the harness connector identity);
+ * open-local      = no token configured, caller is any local process.
+ * Actor strings remain role labels; `auth` is the verifiable half.
+ */
+const AUTH_MODE = GUARD_TOKEN ? "bearer-verified" : "open-local";
+
 const scope = new Scope(defaultScopeFile());
 const audit = new Audit(defaultAuditFile());
 
@@ -95,6 +103,7 @@ function buildServer(): McpServer {
       const verdict = await scope.check(target);
       audit.append({
         actor: "agent",
+        auth: AUTH_MODE,
         action: "scope_check",
         args: { target },
         verdict: verdict.allowed ? "allowed" : "denied",
@@ -115,12 +124,13 @@ function buildServer(): McpServer {
     },
     async ({ entry }) => {
       if (failClosed()) {
-        audit.append({ actor: "agent", action: "scope_add", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
+        audit.append({ actor: "agent", auth: AUTH_MODE, action: "scope_add", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
         return text({ error: FAIL_CLOSED_MSG });
       }
       const error = scope.add(entry);
       audit.append({
         actor: "human-via-agent",
+        auth: AUTH_MODE,
         action: "scope_add",
         args: { entry },
         verdict: error ? "denied" : "mutated",
@@ -140,12 +150,13 @@ function buildServer(): McpServer {
     },
     async ({ entry }) => {
       if (failClosed()) {
-        audit.append({ actor: "agent", action: "scope_remove", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
+        audit.append({ actor: "agent", auth: AUTH_MODE, action: "scope_remove", args: { entry }, verdict: "denied", reason: FAIL_CLOSED_MSG });
         return text({ error: FAIL_CLOSED_MSG });
       }
       const removed = scope.remove(entry);
       audit.append({
         actor: "human-via-agent",
+        auth: AUTH_MODE,
         action: "scope_remove",
         args: { entry },
         verdict: removed ? "mutated" : "denied",
@@ -174,6 +185,7 @@ function buildServer(): McpServer {
       if (!verdict.allowed) {
         audit.append({
           actor: "agent",
+          auth: AUTH_MODE,
           action: "intrusive_request",
           args: { target, action },
           verdict: "denied",
@@ -184,6 +196,7 @@ function buildServer(): McpServer {
       if (REQUIRE_GUARD_TOKEN && !GUARD_TOKEN) {
         audit.append({
           actor: "agent",
+          auth: AUTH_MODE,
           action: "intrusive_request",
           args: { target, action },
           verdict: "denied",
@@ -200,6 +213,7 @@ function buildServer(): McpServer {
       const token = mintGrant(canonicalTarget, action);
       audit.append({
         actor: "human-via-agent",
+        auth: AUTH_MODE,
         action: "intrusive_request",
         // fingerprint only - audit_read must never expose redeemable grant material
         args: { target: canonicalTarget, action, grant: `${token.slice(0, 8)}…` },
@@ -246,6 +260,7 @@ function buildServer(): McpServer {
         const d = await res.json();
         audit.append({
           actor: "agent",
+          auth: AUTH_MODE,
           action: "osv_query",
           args: { name, ecosystem, version },
           verdict: "allowed",
@@ -308,6 +323,7 @@ function buildServer(): McpServer {
       void g;
       audit.append({
         actor: "agent",
+        auth: AUTH_MODE,
         action: "grant_verify",
         args: { target: requested, token: `${token.slice(0, 8)}…` },
         verdict: result.valid ? "allowed" : "denied",
@@ -396,6 +412,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
       if (auth !== expected) {
         audit.append({
           actor: String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "unknown"),
+          auth: AUTH_MODE,
           action: "auth",
           args: { url: req.url },
           verdict: "denied",

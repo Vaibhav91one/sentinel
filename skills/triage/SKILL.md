@@ -24,7 +24,7 @@ Input: recon JSONL artifacts (e.g. `artifacts/<host>.recon.jsonl`,
    recon did not confirm (auth bypass needing an admin route that returned
    404, etc.). Upgrade ones matching observed surface. Every verdict gets a
    one-line `because:` justification.
-4. **Severity** — rank by: confirmed-exploitable > exposed-sensitive-path >
+4. **Severity (draft)** — rank by: confirmed-exploitable > exposed-sensitive-path >
    outdated-but-patched-unknown > info. Map to CVSS when OSV returned a score.
 
 ## Report format
@@ -32,7 +32,7 @@ Input: recon JSONL artifacts (e.g. `artifacts/<host>.recon.jsonl`,
 Write `artifacts/<host>.report.md`:
 
 ```markdown
-# Findings — <host>
+# Findings — <host>  [DRAFT — AI-generated, requires human sign-off]
 
 Scope authorization: <scope entry matched> · Grant used: yes/no
 ## Critical / High
@@ -54,5 +54,6 @@ Also emit machine-readable `artifacts/<host>.report.json`:
 
 - Never invent CVEs. If correlation is empty, say so plainly — a clean report
   is a valid result.
+- Every severity is a DRAFT until a human signs off; say so at the top of the report
 - Remediation advice stays advisory: propose fixes, never apply changes to the
   target. Fixing is out of scope and would need its own approval flow.
