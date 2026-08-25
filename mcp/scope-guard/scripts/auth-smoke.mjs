@@ -104,6 +104,14 @@ try {
   const cGrant = await callTool(C, "request_intrusive_approval", { target: "http://localhost:3000", action: "test sweep" });
   check("dev-mode grant mints", cGrant.approved === true && typeof cGrant.grant_token === "string", JSON.stringify(cGrant).slice(0, 160));
   check("dev-mode grant carries boundary warning", typeof cGrant.warning === "string" && cGrant.warning.includes("GUARD_TOKEN"), JSON.stringify(cGrant.warning));
+
+  // Single-use consumption: first verify passes, reuse fails
+  const v1 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://localhost:3000" });
+  check("grant verifies once", v1.valid === true, JSON.stringify(v1));
+  const v2 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://localhost:3000" });
+  check("grant is single-use (reuse rejected)", v2.valid === false, JSON.stringify(v2));
+  const v3 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://other-target:1" });
+  check("spent grant rejected even for new target", v3.valid === false, JSON.stringify(v3));
 } finally {
   for (const p of procs) p.kill();
 }

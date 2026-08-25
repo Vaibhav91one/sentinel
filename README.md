@@ -38,7 +38,7 @@ at the policy layer, before any human ever sees a prompt.
 | Rebinding  | public-scoped hostnames are DNS-resolved at check time; resolution into private/link-local space is denied fail-closed |
 | Tripwire   | cloud metadata IPs hard-denied, literally or via DNS resolution          |
 | Human      | intrusive actions require an Allow click in the TrueForge UI            |
-| Token      | approved scans carry a single-use, 10-minute `SENTINEL_GRANT`           |
+| Token      | approved scans carry a single-use, 10-minute `SENTINEL_GRANT`; verifiable via `verify_grant`, network-level enforcement is roadmap |
 | Auth       | optional `GUARD_TOKEN` bearer lock so only the harness connector can reach the guard |
 | Isolation  | all scanning runs in the TrueForge sandbox, never on the host           |
 | Forensics  | every decision appended to `data/audit.jsonl`, readable via `audit_read`|

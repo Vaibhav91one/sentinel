@@ -179,7 +179,7 @@ function buildServer(): McpServer {
         approved: true,
         grant_token: token,
         expires_in_minutes: GRANT_TTL_MS / 60000,
-        note: "single-use; embed as SENTINEL_GRANT=<token> in the command",
+        note: "single-use; embed as SENTINEL_GRANT=<token> in the command and confirm with verify_grant (network-layer enforcement is roadmap)",
       };
       if (!GUARD_TOKEN) {
         result.warning =
@@ -254,6 +254,32 @@ function buildServer(): McpServer {
       } catch (err) {
         return text({ error: `osv fetch failed: ${(err as Error).message}` });
       }
+    },
+  );
+
+  server.registerTool(
+    "verify_grant",
+    {
+      title: "Verify intrusive-scan grant",
+      description:
+        "Consumes a single-use grant token for a target. Returns valid:false on reuse, expiry, or target mismatch. "
+        + "NOTE: today this verifies consent bookkeeping; scanning commands are expected to embed SENTINEL_GRANT but nothing network-level forces them to yet (see policy_get residual risks).",
+      inputSchema: {
+        token: z.string().describe("The SENTINEL_GRANT value returned by request_intrusive_approval"),
+        target: z.string().describe("The exact target the grant was issued for"),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    ({ token, target }) => {
+      const result = consumeGrant(token, target);
+      audit.append({
+        actor: "agent",
+        action: "grant_verify",
+        args: { target, token: `${token.slice(0, 8)}…` },
+        verdict: result.valid ? "allowed" : "denied",
+        reason: result.reason,
+      });
+      return text(result);
     },
   );
 
