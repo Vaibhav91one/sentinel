@@ -92,3 +92,10 @@ while (pending.length > 0) {
 }
 console.log("[drive] complete");
 await checkpoint("run total");
+
+// OpenAI estimator reminder when the agent is running on an OpenAI model
+if (process.env.OPENAI_ACTIVE === "1") {
+  try {
+    await import("./openai-usage.mjs");
+  } catch { /* non-fatal */ }
+}
