@@ -19,6 +19,14 @@ const PORT = Number(process.env.PORT ?? 9930);
  */
 const GUARD_TOKEN = process.env.GUARD_TOKEN;
 
+/**
+ * REQUIRE_GUARD_TOKEN=1 makes the human-approval invariant fail closed:
+ * without a verified harness caller (bearer token), request_intrusive_approval
+ * refuses to mint grants at all instead of trusting that the harness pause
+ * happened. Default is warn-only so local development stays friction-free.
+ */
+const REQUIRE_GUARD_TOKEN = process.env.REQUIRE_GUARD_TOKEN === "1";
+
 const scope = new Scope(defaultScopeFile());
 const audit = new Audit(defaultAuditFile());
 
@@ -144,15 +152,40 @@ function buildServer(): McpServer {
         });
         return text({ approved: false, grant_token: null, reason: verdict.reason });
       }
+      if (REQUIRE_GUARD_TOKEN && !GUARD_TOKEN) {
+        audit.append({
+          actor: "agent",
+          action: "intrusive_request",
+          args: { target, action },
+          verdict: "denied",
+          reason: "fail-closed: REQUIRE_GUARD_TOKEN=1 but no GUARD_TOKEN configured - harness-only invariant cannot be verified",
+        });
+        return text({
+          approved: false,
+          grant_token: null,
+          reason:
+            "fail-closed deployment: REQUIRE_GUARD_TOKEN=1 requires a shared bearer token so only the TrueForge harness connector can mint grants. Configure GUARD_TOKEN on the guard and the same value as header auth on the harness connector.",
+        });
+      }
       const token = mintGrant(target, action);
       audit.append({
         actor: "human-via-agent",
         action: "intrusive_request",
         args: { target, action, grant: token },
         verdict: "allowed",
-        reason: `human Allow/Deny enforced upstream by the harness checkpoint on this call; in-scope verified, single-use grant minted (${GRANT_TTL_MS / 60000} min)`,
+        reason: `human Allow/Deny enforced upstream by the harness checkpoint on this call; in-scope verified, single-use grant minted (${GRANT_TTL_MS / 60000} min)${GUARD_TOKEN ? "" : "; WARNING: no GUARD_TOKEN set - boundary open to local callers"}`,
       });
-      return text({ approved: true, grant_token: token, expires_in_minutes: GRANT_TTL_MS / 60000, note: "single-use; embed as SENTINEL_GRANT=<token> in the command" });
+      const result: Record<string, unknown> = {
+        approved: true,
+        grant_token: token,
+        expires_in_minutes: GRANT_TTL_MS / 60000,
+        note: "single-use; embed as SENTINEL_GRANT=<token> in the command",
+      };
+      if (!GUARD_TOKEN) {
+        result.warning =
+          "no GUARD_TOKEN configured: any local caller could reach this endpoint. Set GUARD_TOKEN here and header auth on the harness connector for production posture.";
+      }
+      return text(result);
     },
   );
 
@@ -259,9 +292,11 @@ function buildServer(): McpServer {
         rules: [
           "every outbound contact requires a prior allowed scope_check",
           "public-scoped hostnames are DNS-resolved at check time; resolution into private/link-local space is denied as a rebinding attempt",
+          "residual risk: the target may re-resolve between scope_check and the actual connection - check-time resolution narrows but does not eliminate rebinding; an egress proxy is the complete fix (roadmap)",
           "cloud metadata endpoints (169.254.169.254, metadata.google.internal) are hard-denied, including by DNS resolution",
+          "link-local space is hard-denied, including CIDR entries that overlap it",
           "intrusive actions: the TrueForge harness pauses request_intrusive_approval for a human Allow/Deny BEFORE it executes; the guard then mints a single-use 10-minute grant token",
-          "when GUARD_TOKEN is set, only callers presenting the shared bearer token (the harness connector) can reach this server at all",
+          "trust boundary: set GUARD_TOKEN here + header auth on the harness connector so ONLY the harness can call this server; REQUIRE_GUARD_TOKEN=1 fails closed when that invariant cannot be verified",
           "all decisions land in the append-only audit log (audit_read)",
         ],
         allow_size: scope.list().length,
@@ -345,4 +380,7 @@ httpServer.listen(PORT, "127.0.0.1", () => {
   console.log(`[${NAME}] listening on http://127.0.0.1:${PORT}/mcp`);
   console.log(`[${NAME}] scope file: ${scope.file} (${scope.list().length} entries)`);
   console.log(`[${NAME}] audit file: ${audit.file}`);
+  if (!GUARD_TOKEN) {
+    console.warn(`[${NAME}] WARNING: GUARD_TOKEN not set - any local process can call this server. Set it (and header auth on the TrueForge connector) for anything beyond local dev.`);
+  }
 });

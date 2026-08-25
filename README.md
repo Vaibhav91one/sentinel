@@ -43,11 +43,21 @@ at the policy layer, before any human ever sees a prompt.
 | Isolation  | all scanning runs in the TrueForge sandbox, never on the host           |
 | Forensics  | every decision appended to `data/audit.jsonl`, readable via `audit_read`|
 
-Known limits, stated honestly: the guard cannot see HTTP redirects made inside
-the sandbox (the recon skill forbids following them off-target), and the grant
-token is a procedural control — commands are expected to embed it, not forced
-by a network filter. Roadmap: sandbox-side egress proxy that drops packets
-without a valid token.
+Known limits, stated honestly:
+- **TOCTOU rebinding** — the guard resolves hostnames at check time, but the
+  sandbox's own resolver answers again when the scan actually connects. A
+  hostile DNS server with short TTLs can serve a different answer between the
+  two. Check-time resolution narrows the window; it does not close it. The
+  complete fix is a sandbox-side egress proxy that validates every connection
+  (roadmap).
+- The guard cannot see HTTP redirects made inside the sandbox (the recon skill
+  forbids following them off-target).
+- The grant token is procedural — commands are expected to embed
+  `SENTINEL_GRANT`, nothing network-level forces it yet.
+- Trust boundary: without `GUARD_TOKEN` set (and matching header auth on the
+  TrueForge connector), any local process can call the guard. Set
+  `REQUIRE_GUARD_TOKEN=1` to make intrusive grants fail closed when that
+  invariant cannot be verified.
 
 **You are responsible for only scanning targets you own or have written
 permission to test.** The default scope is `localhost` so the demo target is
