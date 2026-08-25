@@ -19,7 +19,7 @@
     "config": {
       "sandbox": { "enabled": true, "file_downloads": true },
       "generative_ui": { "enabled": true },
-      "ask_user_questions": { "enabled": true },
+      "ask_user_questions": { "enabled": false },
       "dynamic_sub_agents": { "enabled": true },
       "context_management": {
         "compaction": { "enabled": true, "compaction_threshold_tokens": 20000 },

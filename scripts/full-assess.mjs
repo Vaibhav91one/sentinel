@@ -27,6 +27,7 @@ const { data: session } = await client.sessions.create({ agent: { name: "sentine
 console.log(`[drive] session ${session.id} (auto=${AUTO})`);
 
 const pending = [];
+const pendingResp = [];
 
 async function runTurn(input) {
   const stream = await client.sessions.createTurnStream(session.id, { input });
@@ -88,21 +89,29 @@ const PROMPT = process.env.ASSESS_PROMPT ??
 
 await runTurn([{ type: "user.message", content: PROMPT }]);
 
-while (pendingResp.length > 0) {
-  const id = pendingResp.shift();
-  console.log(`  [drive] answering question ${id}`);
-  await runTurn([{ type: "user.tool_response", threadId: "main", toolCallId: id, content: "Proceed. Make reasonable security-assessment choices autonomously and continue to the next phase." }]);
-}
-while (pending.length > 0) {
-  // resolve ALL pending approvals in one batch - harness requires it
-  const batch = pending.splice(0).map((cid) => ({
-    type: "user.tool_approval",
-    threadId: "main",
-    toolCallId: cid,
-    approval: AUTO === "allow" ? { status: "allow" } : { status: "deny", reason: "demo deny pass" },
-  }));
-  console.log(`  [drive] resuming ${batch.length} approval(s) -> ${AUTO}`);
-  await runTurn(batch);
+// Alternate until both queues drain: harness may surface questions and
+// approvals interleaved across resumes.
+let guard = 0;
+while ((pending.length > 0 || pendingResp.length > 0) && guard++ < 40) {
+  if (pendingResp.length > 0) {
+    const id = pendingResp.shift();
+    console.log(`  [drive] answering question ${id}`);
+    await runTurn([{
+      type: "user.tool_response",
+      threadId: "main",
+      toolCallId: id,
+      content: "Proceed autonomously. Make reasonable security-assessment choices and continue to the next phase without asking again unless blocked.",
+    }]);
+  } else if (pending.length > 0) {
+    const batch = pending.splice(0).map((cid) => ({
+      type: "user.tool_approval",
+      threadId: "main",
+      toolCallId: cid,
+      approval: AUTO === "allow" ? { status: "allow" } : { status: "deny", reason: "demo deny pass" },
+    }));
+    console.log(`  [drive] resuming ${batch.length} approval(s) -> ${AUTO}`);
+    await runTurn(batch);
+  }
 }
 console.log("[drive] complete");
 await checkpoint("run total");
