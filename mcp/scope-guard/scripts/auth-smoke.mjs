@@ -105,12 +105,14 @@ try {
   check("dev-mode grant mints", cGrant.approved === true && typeof cGrant.grant_token === "string", JSON.stringify(cGrant).slice(0, 160));
   check("dev-mode grant carries boundary warning", typeof cGrant.warning === "string" && cGrant.warning.includes("GUARD_TOKEN"), JSON.stringify(cGrant.warning));
 
-  // Single-use consumption: first verify passes, reuse fails
+  // Single-use consumption with non-destructive wrong-target handling
+  const vWrong = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://other-target:1" });
+  check("wrong-target verify rejected", vWrong.valid === false && vWrong.reason.includes("remains active"), JSON.stringify(vWrong));
   const v1 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://localhost:3000" });
-  check("grant verifies once", v1.valid === true, JSON.stringify(v1));
+  check("grant still valid after wrong-target attempt", v1.valid === true, JSON.stringify(v1));
   const v2 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://localhost:3000" });
   check("grant is single-use (reuse rejected)", v2.valid === false, JSON.stringify(v2));
-  const v3 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://other-target:1" });
+  const v3 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://localhost:3000" });
   check("spent grant rejected even for new target", v3.valid === false, JSON.stringify(v3));
 } finally {
   for (const p of procs) p.kill();

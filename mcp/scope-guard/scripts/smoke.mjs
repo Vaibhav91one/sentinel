@@ -153,6 +153,8 @@ check("unspecified :: entry refused at add", typeof u1.error === "string" && u1.
 const u2 = await tool("scope_check", { target: "http://[::]" });
 check("unspecified :: target denied", u2.allowed === false && u2.target_class === "reserved", JSON.stringify(u2));
 const u3 = await tool("scope_check", { target: "http://192.0.2.1" });
+const u3b = await tool("scope_check", { target: "http://192.0.0.1" });
+check("IETF-assignment literal denied", u3b.allowed === false && u3b.target_class === "reserved", JSON.stringify(u3b));
 check("TEST-NET-1 literal denied", u3.allowed === false && u3.target_class === "reserved", JSON.stringify(u3));
 const u4 = await tool("scope_add", { entry: "203.0.113.0/24" });
 check("TEST-NET-3 CIDR refused at add", typeof u4.error === "string" && u4.error.includes("hard-denied"), JSON.stringify(u4));

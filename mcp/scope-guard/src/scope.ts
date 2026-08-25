@@ -373,6 +373,7 @@ function classify(hostPort: string): TargetClass {
     if (a === 198 && b === 51) return "reserved"; // TEST-NET-2
     if (a === 203 && b === 0 && c === 113) return "reserved"; // TEST-NET-3
     if (a === 192 && b === 88 && c === 99) return "reserved"; // 192.88.99.0/24
+    if (a === 192 && b === 0 && c === 0) return "reserved"; // 192.0.0.0/24 IETF protocol assignments
     if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) return "private";
     return "public";
   }

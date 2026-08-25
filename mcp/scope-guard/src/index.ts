@@ -49,9 +49,17 @@ function mintGrant(target: string, action: string): string {
 export function consumeGrant(token: string, target: string): { valid: boolean; reason: string } {
   const g = grants.get(token);
   if (!g) return { valid: false, reason: "unknown grant token" };
+  if (Date.now() > g.expires_at) {
+    grants.delete(token); // expired tokens are garbage-collected on first touch
+    return { valid: false, reason: "grant expired" };
+  }
+  // A wrong-target attempt does NOT burn the grant: typos by the approved
+  // caller should not force a fresh human approval. Only a matching
+  // (token, target) pair consumes the single use.
+  if (g.target !== target) {
+    return { valid: false, reason: `grant was issued for ${g.target}, not ${target} (grant remains active)` };
+  }
   grants.delete(token);
-  if (Date.now() > g.expires_at) return { valid: false, reason: "grant expired" };
-  if (g.target !== target) return { valid: false, reason: `grant was issued for ${g.target}, not ${target}` };
   return { valid: true, reason: `human-approved grant for "${g.action}" on ${g.target}` };
 }
 
