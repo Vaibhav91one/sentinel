@@ -22,7 +22,7 @@
       "ask_user_questions": { "enabled": false },
       "dynamic_sub_agents": { "enabled": true },
       "context_management": {
-        "compaction": { "enabled": true, "compaction_threshold_tokens": 20000 },
+        "compaction": { "enabled": true, "compaction_threshold_tokens": 60000 },
         "large_tool_response": { "enabled": true }
       },
       "iteration_limit": 80
