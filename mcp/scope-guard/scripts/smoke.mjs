@@ -92,6 +92,15 @@ check("invalid CIDR refused", typeof a5.error === "string" && a5.error.includes(
 
 // public hostname resolving into loopback space -> rebinding guard
 await tool("scope_add", { entry: "localtest.me" });
+// Offline: hostname:port entries round-trip
+const p1 = await tool("scope_add", { entry: "example.com:8443" });
+check("host:port entry accepted", !!p1.allow?.includes("example.com:8443"), JSON.stringify(p1));
+const p2 = await tool("scope_check", { target: "https://example.com:8443" });
+check("matching port allowed", p2.allowed === true && p2.matched === "example.com:8443", JSON.stringify(p2));
+const p3 = await tool("scope_check", { target: "https://example.com:8080" });
+check("different port denied", p3.allowed === false, JSON.stringify(p3));
+await tool("scope_remove", { entry: "example.com:8443" });
+
 const a6 = await tool("scope_check", { target: "http://localtest.me:3000" });
 check(
   "DNS rebinding guard denies public name resolving to loopback",
@@ -121,15 +130,6 @@ const m3 = await tool("scope_check", { target: "http://[::ffff:10.0.0.5]" });
 check("mapped-v6 private target denied unscoped", m3.allowed === false && m3.target_class === "private", JSON.stringify(m3));
 const m4 = await tool("scope_check", { target: "http://[::ffff:127.0.0.1]" });
 check("mapped-v6 loopback classified loopback", m4.target_class === "loopback", JSON.stringify(m4));
-
-// Offline: hostname:port entries round-trip
-const p1 = await tool("scope_add", { entry: "example.com:8443" });
-check("host:port entry accepted", !!p1.allow?.includes("example.com:8443"), JSON.stringify(p1));
-const p2 = await tool("scope_check", { target: "https://example.com:8443" });
-check("matching port allowed", p2.allowed === true && p2.matched === "example.com:8443", JSON.stringify(p2));
-const p3 = await tool("scope_check", { target: "https://example.com:8080" });
-check("different port denied", p3.allowed === false, JSON.stringify(p3));
-await tool("scope_remove", { entry: "example.com:8443" });
 
 // Offline: expanded IPv6 loopback canonicalizes onto the "::1" entry
 const e1 = await tool("scope_check", { target: "http://[0:0:0:0:0:0:0:1]:3000" });
@@ -173,6 +173,8 @@ check("bracketed host:port entry accepted", !!h2.allow?.includes("2606:4700:4700
 const h3 = await tool("scope_check", { target: "http://[2606:4700:4700::1111]:443" });
 check("bracketed host:port target matches", h3.allowed === true && h3.matched === "2606:4700:4700::1111", JSON.stringify(h3));
 await tool("scope_remove", { entry: "2606:4700:4700::1111" });
+const h4 = await tool("scope_add", { entry: "1:2:3:4:5:6:1.2.3.4" });
+check("embedded v4 tail rejected in parser", typeof h4.error === "string" && h4.error.includes("not a valid"), JSON.stringify(h4));
 
 // cleanup
 await tool("scope_remove", { entry: "*.nip.io" });

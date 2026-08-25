@@ -295,10 +295,10 @@ export function parseIPv6(s: string): number[] | null {
   if (!s.includes(":") || !/^[0-9a-f:.]+$/i.test(s)) return null;
   const doubleColons = s.match(/::/g)?.length ?? 0;
   if (doubleColons > 1) return null;
-  // Embedded dotted-quad tails are rejected here; mapped-v6 is unwrapped earlier.
-  if (/\.|$/.test("") ) { /* noop to keep structure clear */ }
+  // Embedded dotted-quad tails ("x:x:x:x:x:x:1.2.3.4") are rejected here;
+  // mapped-v6 must arrive in ::ffff: form and is unwrapped earlier.
   const parts = s.split(":");
-  if (parts.some((p) => p.includes("."))) return null;
+  if (parts.some((p) => p.includes("."))) return null; // embedded v4 tail rejected
   let head: string[] = parts;
   let tail: string[] = [];
   if (doubleColons === 1) {
