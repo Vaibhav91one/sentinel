@@ -22,6 +22,7 @@ export type TargetClass =
   | "private"
   | "link_local"
   | "cloud_metadata"
+  | "reserved"
   | "public"
   | "unresolvable_input";
 
@@ -75,7 +76,14 @@ export class Scope {
     // A CIDR that overlaps link-local or metadata space would silently
     // authorize those addresses through a seemingly innocuous range.
     if (entryHostIncludesSlash(normalized)) {
-      for (const banned of ["169.254.0.0/16", "0.0.0.0/8"]) {
+      for (const banned of [
+        "169.254.0.0/16", // link-local / cloud metadata
+        "0.0.0.0/8", // this-network
+        "100.64.0.0/10", // CGNAT
+        "198.18.0.0/15", // benchmarking
+        "224.0.0.0/4", // multicast
+        "240.0.0.0/4", // reserved
+      ]) {
         if (cidrOverlaps(normalized, banned)) {
           return `refused: CIDR ${normalized} overlaps hard-denied ${banned}`;
         }
@@ -165,7 +173,13 @@ export class Scope {
         matched,
       };
     }
-    if (cls === "public" && (resolvedClasses.has("private") || resolvedClasses.has("loopback") || resolvedClasses.has("link_local"))) {
+    if (
+      cls === "public" &&
+      (resolvedClasses.has("private") ||
+        resolvedClasses.has("loopback") ||
+        resolvedClasses.has("link_local") ||
+        resolvedClasses.has("reserved"))
+    ) {
       return {
         allowed: false,
         reason: `DNS rebinding guard: public-scoped "${host}" resolves to private address (${addresses.join(", ")}) — scope the IP/CIDR explicitly instead`,
@@ -234,6 +248,9 @@ function classify(hostPort: string): TargetClass {
     const [a, b] = host.split(".").map(Number);
     if (a === 127) return "loopback";
     if (a === 169 && b === 254) return "link_local";
+    if (a === 0 || a >= 224) return "reserved"; // this-network, multicast, reserved
+    if (a === 100 && b >= 64 && b <= 127) return "reserved"; // CGNAT 100.64.0.0/10
+    if (a === 198 && (b === 18 || b === 19)) return "reserved"; // benchmarking 198.18.0.0/15
     if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) return "private";
     return "public";
   }

@@ -36,8 +36,11 @@ jobs:
           echo "scope-guard failed to start" >&2
           exit 1
 
-      - name: Protocol smoke tests
-        run: node mcp/scope-guard/scripts/smoke.mjs
+      - name: Protocol smoke tests (network-independent)
+        run: SMOKE_SKIP_NETWORK=1 node mcp/scope-guard/scripts/smoke.mjs
+
+      - name: Auth + fail-closed integration tests
+        run: node mcp/scope-guard/scripts/auth-smoke.mjs
 
       - name: Scope unit checks (deny-by-default)
         run: |

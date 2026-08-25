@@ -58,6 +58,11 @@ check("other link-local addresses hard-denied", t2b.allowed === false && t2b.rea
 const t3 = await tool("scope_check", { target: "https://stripe.com" });
 check("out-of-scope public host denied", t3.allowed === false && !t3.matched, JSON.stringify(t3));
 
+// Network-dependent cases (real DNS). CI runs with SMOKE_SKIP_NETWORK=1 so a
+// resolver outage cannot fail an otherwise-correct policy build.
+if (process.env.SMOKE_SKIP_NETWORK === "1") {
+  console.log("  skip  network-dependent checks (SMOKE_SKIP_NETWORK=1)");
+} else {
 const a1 = await tool("scope_add", { entry: "*.nip.io" });
 check("wildcard entry accepted", !!a1.allow?.includes("*.nip.io"), JSON.stringify(a1));
 const a1b = await tool("scope_check", { target: "http://93.184.216.34.nip.io" });
@@ -94,6 +99,13 @@ check(
   JSON.stringify(a6),
 );
 await tool("scope_remove", { entry: "localtest.me" });
+} // end network-dependent block
+
+// Offline: unscoped reserved-range literals are denied without DNS
+const t4 = await tool("scope_check", { target: "http://0.0.0.0" });
+check("reserved literal (0.0.0.0) denied", t4.allowed === false && t4.target_class === "reserved", JSON.stringify(t4));
+const t4b = await tool("scope_check", { target: "http://100.64.99.99" });
+check("unscoped reserved literal (CGNAT) denied", t4b.allowed === false && t4b.target_class === "reserved", JSON.stringify(t4b));
 
 // cleanup
 await tool("scope_remove", { entry: "*.nip.io" });
