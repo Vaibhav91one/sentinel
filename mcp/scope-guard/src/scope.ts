@@ -80,12 +80,16 @@ export class Scope {
     // authorize those addresses through a seemingly innocuous range.
     if (entryHostIncludesSlash(normalized)) {
       for (const banned of [
-        "169.254.0.0/16", // link-local / cloud metadata
         "0.0.0.0/8", // this-network
         "100.64.0.0/10", // CGNAT
+        "169.254.0.0/16", // link-local / cloud metadata
+        "192.0.0.0/24", // IETF protocol assignments
+        "192.0.2.0/24", // TEST-NET-1
         "198.18.0.0/15", // benchmarking
+        "198.51.100.0/24", // TEST-NET-2
+        "203.0.113.0/24", // TEST-NET-3
         "224.0.0.0/4", // multicast
-        "240.0.0.0/4", // reserved
+        "240.0.0.0/4", // reserved (incl. broadcast)
       ]) {
         if (cidrOverlaps(normalized, banned)) {
           return `refused: CIDR ${normalized} overlaps hard-denied ${banned}`;
@@ -346,18 +350,23 @@ function classify(hostPort: string): TargetClass {
   if (host === "169.254.169.254" || host === "metadata.google.internal") return "cloud_metadata";
   if (host === "localhost" || host.endsWith(".localhost")) return "loopback";
   if (isIPv4(host)) {
-    const [a, b] = host.split(".").map(Number);
+    const [a, b, c] = host.split(".").map(Number);
     if (a === 127) return "loopback";
     if (a === 169 && b === 254) return "link_local";
     if (a === 0 || a >= 224) return "reserved"; // this-network, multicast, reserved
     if (a === 100 && b >= 64 && b <= 127) return "reserved"; // CGNAT 100.64.0.0/10
     if (a === 198 && (b === 18 || b === 19)) return "reserved"; // benchmarking 198.18.0.0/15
+    if (a === 192 && b === 0 && c === 2) return "reserved"; // TEST-NET-1
+    if (a === 198 && b === 51) return "reserved"; // TEST-NET-2
+    if (a === 203 && b === 0 && c === 113) return "reserved"; // TEST-NET-3
+    if (a === 192 && b === 88 && c === 99) return "reserved"; // 192.88.99.0/24
     if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) return "private";
     return "public";
   }
   if (host.includes(":")) {
     const g = parseIPv6(host);
     if (!g) return "reserved"; // colon-string we cannot parse: fail closed
+    if (g.every((n) => n === 0)) return "reserved"; // unspecified ::/128
     if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0 && g[6] === 0 && g[7] === 1)
       return "loopback";
     if ((g[0] & 0xffc0) === 0xfe80) return "link_local"; // fe80::/10

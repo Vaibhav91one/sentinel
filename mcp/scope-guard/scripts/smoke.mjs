@@ -147,6 +147,16 @@ check("multicast literal denied", r1.allowed === false && r1.target_class === "r
 const r2 = await tool("scope_add", { entry: "224.0.0.1" });
 check("multicast entry refused at add", typeof r2.error === "string" && r2.error.includes("hard-denied"), JSON.stringify(r2));
 
+// Offline: unspecified IPv6 "::" and documentation ranges are reserved
+const u1 = await tool("scope_add", { entry: "::" });
+check("unspecified :: entry refused at add", typeof u1.error === "string" && u1.error.includes("hard-denied"), JSON.stringify(u1));
+const u2 = await tool("scope_check", { target: "http://[::]" });
+check("unspecified :: target denied", u2.allowed === false && u2.target_class === "reserved", JSON.stringify(u2));
+const u3 = await tool("scope_check", { target: "http://192.0.2.1" });
+check("TEST-NET-1 literal denied", u3.allowed === false && u3.target_class === "reserved", JSON.stringify(u3));
+const u4 = await tool("scope_add", { entry: "203.0.113.0/24" });
+check("TEST-NET-3 CIDR refused at add", typeof u4.error === "string" && u4.error.includes("hard-denied"), JSON.stringify(u4));
+
 // Offline: IPv6 literal entries round-trip ("[::1]" canonicalizes onto default-scoped "::1")
 const v1 = await tool("scope_add", { entry: "[::1]" });
 check(
