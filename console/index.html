@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel Console</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--line:#30363d;
+    --text:#e6edf3;--dim:#8b949e;--accent:#58a6ff;--green:#3fb950;
+    --amber:#d29922;--red:#f85149;--purple:#bc8cff;
+    --mono:"SF Mono",ui-monospace,Menlo,monospace;--sans:-apple-system,"Segoe UI",Inter,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;display:flex;height:100vh;overflow:hidden}
+  /* sidebar */
+  #side{width:210px;min-width:210px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 10px}
+  #side .logo{font-weight:700;font-size:15px;margin-bottom:4px}
+  #side .logo span{color:var(--accent)}
+  #side .tag{font-size:10px;color:var(--dim);margin-bottom:18px}
+  .nav{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;color:var(--dim);cursor:pointer;margin-bottom:2px;position:relative}
+  .nav:hover{background:var(--panel2);color:var(--text)}
+  .nav.active{background:var(--panel2);color:var(--text)}
+  .nav .badge{margin-left:auto;background:var(--red);color:#fff;font-size:10px;padding:0 6px;border-radius:999px;font-family:var(--mono)}
+  .sep{border-top:1px solid var(--line);margin:12px 0}
+  #health{margin-top:auto;font-family:var(--mono);font-size:10px;color:var(--dim);line-height:1.7}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:5px}
+  .dot.off{background:var(--red)}
+  /* main */
+  #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  header#top{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  #top h1{font-size:15px;font-weight:600}
+  button.primary{background:var(--accent);border:none;color:#0d1117;font-weight:600;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:13px}
+  button.primary:hover{filter:brightness(1.1)}
+  button.ghost{background:none;border:1px solid var(--line);color:var(--text);padding:6px 12px;border-radius:7px;cursor:pointer;font-size:13px}
+  button.ghost:hover{border-color:var(--accent)}
+  #view{flex:1;overflow:auto;padding:18px 20px}
+  /* board */
+  .board{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .col h3{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);margin-bottom:10px;display:flex;gap:6px;align-items:center}
+  .col h3 b{color:var(--text)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:8px;cursor:pointer}
+  .card:hover{border-color:var(--accent)}
+  .card .tid{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-all}
+  .card .st{font-size:12px;margin-top:5px}
+  .chip{display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;border:1px solid;font-family:var(--mono);margin-right:4px}
+  .c-blue{color:var(--accent);border-color:var(--accent)} .c-green{color:var(--green);border-color:var(--green)}
+  .c-red{color:var(--red);border-color:var(--red)} .c-amber{color:var(--amber);border-color:var(--amber)}
+  .c-dim{color:var(--dim);border-color:var(--line)}
+  /* mission workspace */
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:14px}
+  .tab{padding:8px 16px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
+  .tab.active{color:var(--text);border-color:var(--accent)}
+  .stream{font-family:var(--mono);font-size:12px;line-height:1.65}
+  .ev{padding:3px 0;border-bottom:1px dashed #21262d;display:flex;gap:8px}
+  .ev .t{color:var(--dim);min-width:64px}
+  .ev .k{min-width:150px}
+  .k.tool-call{color:var(--purple)} .k.approval{color:var(--red)} .k.done{color:var(--green)} .k.model{color:var(--accent)}
+  pre.report{white-space:pre-wrap;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:16px;font-size:12.5px;line-height:1.6}
+  /* approval dock */
+  #dock{position:fixed;right:18px;bottom:18px;width:340px;z-index:50}
+  .apcard{background:var(--panel);border:1px solid var(--red);border-radius:11px;padding:14px;margin-top:10px;box-shadow:0 8px 30px rgba(0,0,0,.45)}
+  .apcard h4{font-size:13px;color:var(--red);margin-bottom:6px}
+  .apcard .args{font-family:var(--mono);font-size:11px;color:var(--dim);background:var(--bg);border-radius:6px;padding:8px;margin:8px 0;max-height:110px;overflow:auto;white-space:pre-wrap}
+  .apcard .btns{display:flex;gap:8px;margin-top:10px}
+  .btn-allow{flex:1;background:var(--green);border:none;color:#04140a;font-weight:700;padding:8px;border-radius:7px;cursor:pointer}
+  .btn-deny{flex:1;background:none;border:1px solid var(--red);color:var(--red);padding:8px;border-radius:7px;cursor:pointer}
+  /* modal */
+  #modalWrap{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100}
+  #modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:520px;max-width:92vw;padding:22px}
+  textarea{width:100%;min-height:130px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font-family:var(--sans);font-size:13px;resize:vertical}
+  select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px;font-size:13px}
+  label{font-size:12px;color:var(--dim);display:block;margin:10px 0 4px}
+  table.kv{font-size:12px} table.kv td{padding:3px 8px;border:none} table.kv td:first-child{color:var(--dim)}
+</style>
+</head>
+<body>
+
+<nav id="side">
+  <div class="logo">◐ <span>Sentinel</span></div>
+  <div class="tag">scope-enforced recon</div>
+  <div class="nav active" data-view="board">▦ Missions <span class="badge" id="needsBadge" style="display:none">0</span></div>
+  <div class="nav" data-view="approvals">⛨ Approvals <span class="badge" id="dockBadge" style="display:none">0</span></div>
+  <div class="nav" data-view="scope">◎ Scope</div>
+  <div class="nav" data-view="audit">☰ Audit log</div>
+  <div class="sep"></div>
+  <div class="nav" onclick="window.open('/api/v1/docs','_blank')">↗ API docs</div>
+  <div id="health">
+    harness <span class="dot" id="hHarness"></span><br>
+    guard&nbsp;&nbsp;&nbsp; <span class="dot" id="hGuard"></span><br>
+    <span id="hSync"></span>
+  </div>
+</nav>
+
+<main id="main">
+  <header id="top">
+    <h1 id="title">Missions</h1>
+    <div style="flex:1"></div>
+    <button class="primary" onclick="UI.openNewMission()">＋ New mission</button>
+  </header>
+  <div id="view"></div>
+</main>
+
+<div id="dock"></div>
+
+<div id="modalWrap">
+  <div id="modal">
+    <h3 style="margin-bottom:4px">New mission</h3>
+    <p style="color:var(--dim);font-size:12px">The agent scope-checks every contact before it happens.</p>
+    <label>Objective</label>
+    <textarea id="mPrompt">Assess the demo target end to end using sentinel-recon Phase 0 Option B: run sandbox-setup/juice-shop.sh in the sandbox to boot Juice Shop on localhost:3000, then scope_check, passive fingerprint, request intrusive approval for a probe sweep, correlate CVEs via osv tools, and produce the ranked findings report.</textarea>
+    <label>Agent</label>
+    <select id="mAgent"><option>sentinel</option></select>
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+      <button class="ghost" onclick="UI.closeModal()">Cancel</button>
+      <button class="primary" onclick="UI.startMission()">Start mission</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= helpers ================= */
+const $ = (s) => document.querySelector(s);
+const api = async (path, opts={}) => {
+  const res = await fetch("/api" + path, {
+    method: opts.method ?? "GET",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(d?.error?.message ?? res.status);
+  return d;
+};
+const guardRpc = async (method, params) => {
+  const res = await fetch("/guard/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+  });
+  const d = await res.json();
+  return d.result?.content?.[0]?.text ?? JSON.stringify(d);
+};
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const shortId = (id) => id.slice(-8);
+
+/* ================= state ================= */
+const S = {
+  view: "board",
+  missions: [],            // {id,status,requiredActions,pendingIds[],lastEventTs}
+  currentMission: null,
+  approvals: new Map(),    // sessionId -> [{toolCallId, toolName?, argsPreview}]
+};
+
+/* ================= API ops ================= */
+async function refreshMissions() {
+  try {
+    const d = await api("/v1/sessions");
+    S.missions = (d.data ?? []).map((m) => ({
+      id: m.id,
+      status: m.state?.status ?? m.status ?? "?",
+      requiredActions: m.state?.required_actions ?? m.required_actions ?? [],
+    }));
+    $("#hHarness").className = "dot";
+  } catch {
+    $("#hHarness").className = "dot off";
+  }
+  // detect pending approvals per mission from events tail
+  for (const m of S.missions.filter((x) => x.status === "running")) {
+    try {
+      const d = await api(`/v1/sessions/${m.id}/events`);
+      const evs = d.data ?? [];
+      const pend = evs.find((e) => e.event?.type === "tool.approval_required");
+      const doneTop = evs[0]?.event?.type === "turn.done";
+      m.pendingIds = !doneTop && pend
+        ? (pend.event.toolCalls ?? pend.event.tool_calls ?? []).map((c) => c.id ?? c.toolCallId)
+        : [];
+    } catch { m.pendingIds = []; }
+  }
+  renderDock();
+  if (S.view === "board") renderBoard();
+}
+
+/* ================= board ================= */
+function renderBoard() {
+  const cols = { running: [], needsyou: [], done: [], cancelled: [] };
+  for (const m of S.missions) {
+    if (m.pendingIds?.length) cols.needsyou.push(m);
+    else if (m.status === "running") cols.running.push(m);
+    else if (m.status === "done") cols.done.push(m);
+    else cols.cancelled.push(m);
+  }
+  const col = (title, list, chip) =>
+    `<div class="col"><h3>${title} <b>${list.length}</b></h3>` +
+    list.map((m) => `
+      <div class="card" onclick="UI.openMission('${m.id}')">
+        <div class="tid">…${shortId(m.id)}</div>
+        <div class="st">${chip}</div>
+        ${m.pendingIds?.length ? `<div style="margin-top:6px"><span class="chip c-red">⏸ awaiting you</span></div>` : ""}
+      </div>`).join("") +
+    `</div>`;
+
+  $("#view").innerHTML =
+    `<div class="board">
+      ${col("① Running", cols.running, `<span class="chip c-blue">● running</span>`)}
+      ${col("② Needs you", cols.needsyou, `<span class="chip c-red">⚑ approval</span>`)}
+      ${col("③ Done", cols.done, `<span class="chip c-green">✓ complete</span>`)}
+      ${col("④ Cancelled / other", cols.cancelled, `<span class="chip c-dim">${cols.cancelled.length ? "—" : "empty"}</span>`)}
+    </div>`;
+  const n = cols.needsyou.length;
+  $("#needsBadge").style.display = n ? "" : "none";
+  $("#needsBadge").textContent = n;
+}
+
+/* ================= mission workspace ================= */
+async function openMission(id) {
+  S.currentMission = id;
+  location.hash = "#mission/" + id;
+  setView("mission");
+  await pollMission();
+}
+
+async function pollMission() {
+  const id = S.currentMission;
+  if (!id || S.view !== "mission") return;
+  let evs = [];
+  let runningFlag = false;
+  try {
+    const d = await api(`/v1/sessions/${id}/events`);
+    evs = (d.data ?? []).slice().reverse(); // chronological
+    runningFlag = evs[evs.length - 1]?.event?.type !== "turn.done";
+    $("#hHarness").className = "dot";
+  } catch { $("#hHarness").className = "dot off"; }
+
+  // pending approvals in latest unfinished turn
+  const pend = [];
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const ev = evs[i].event ?? {};
+    if (ev.type === "turn.done") break;
+    if (ev.type === "tool.approval_required")
+      for (const c of ev.toolCalls ?? ev.tool_calls ?? []) pend.push(c.id ?? c.toolCallId);
+  }
+  registerApprovals(id, pend);
+
+  const rows = evs.map(({ event: ev }) => {
+    const ts = (ev.created_at ?? "").slice(11, 19);
+    switch (ev.type) {
+      case "model.message": {
+        let txt = "";
+        const tcs = ev.tool_calls ?? [];
+        if (Array.isArray(ev.content)) txt = ev.content.map((c) => c.text ?? "").join("");
+        else if (typeof ev.content === "string") txt = ev.content;
+        let html = "";
+        for (const tc of tcs) {
+          const f = tc.function ?? {};
+          html += `<div class="ev"><span class="t">${ts}</span><span class="k tool-call">▸ ${esc(f.name ?? "?")}()</span><span>${esc((f.arguments ?? "").slice(0, 90))}</span></div>`;
+        }
+        if (txt.trim()) html += `<div class="ev"><span class="t">${ts}</span><span class="k model">◆ message</span><span style="white-space:pre-wrap">${esc(txt.slice(0, 400))}${txt.length > 400 ? " …" : ""}</span></div>`;
+        return html;
+      }
+      case "tool.response": return "";
+      case "tool.approval_required":
+        return `<div class="ev"><span class="t">${ts}</span><span class="k approval">⏸ approval requested</span><span>see dock →</span></div>`;
+      case "sandbox.created": return `<div class="ev"><span class="t">${ts}</span><span class="k">▣ sandbox provisioned</span></div>`;
+      case "mcp.initialize": return `<div class="ev"><span class="t">${ts}</span><span class="k">plug connectors ready</span></div>`;
+      case "turn.done": {
+        const m = ev.state?.metrics;
+        const tk = m ? `${(m.total_tokens ?? 0).toLocaleString()} tok` : "";
+        return `<div class="ev"><span class="t">${ts}</span><span class="k done">✔ turn done</span><span>${tk}</span></div>`;
+      }
+      default:
+        if (/sandbox/.test(ev.type)) return `<div class="ev"><span class="t">${ts}</span><span class="k">${esc(ev.type)}</span></div>`;
+        return "";
+    }
+  }).join("");
+
+  const finalText = (() => {
+    const msgs = evs.filter((e) => e.event?.type === "model.message");
+    const lastWithText = [...msgs].reverse().find((e) => {
+      const c = e.event.content;
+      const s = typeof c === "string" ? c : Array.isArray(c) ? c.map((x) => x.text ?? "").join("") : "";
+      return s.trim() && e.event.finish_reason === "stop";
+    });
+    if (!lastWithText) return "";
+    const c = lastWithText.event.content;
+    return typeof c === "string" ? c : Array.isArray(c) ? c.map((x) => x.text ?? "").join("") : "";
+  })();
+
+  const tabs = `
+    <div class="tabs">
+      <div class="tab active" data-t="stream">Stream</div>
+      <div class="tab" data-t="report">Report</div>
+      <div class="tab" onclick="UI.showAudit('${id}')">Audit (guard)</div>
+    </div>`;
+
+  $("#view").innerHTML =
+    `<div class="kv" style="margin-bottom:10px">mission …${shortId(id)} · ${runningFlag ? '<span class="chip c-blue">● running</span>' : '<span class="chip c-green">idle</span>'}
+       <button class="ghost" style="margin-left:12px" onclick="UI.backToBoard()">← board</button></div>`
+    + tabs
+    + `<div id="tab-stream" class="stream">${rows || '<span class="dim">waiting for events…</span>'}</div>`
+    + `<div id="tab-report" style="display:none">${
+        finalText
+          ? `<pre class="report">${esc(finalText)}</pre>`
+          : `<p class="dim">No signed-off report yet — the final assistant message appears here when the mission completes.</p>`
+      }</div>`;
+
+  bindTabs();
+  rebindTabsOnce();
+}
+
+/* tabs */
+let tabsBound = false;
+function rebindTabsOnce() {
+  if (tabsBound) return;
+  tabsBound = true;
+  $("#view").addEventListener("click", (e) => {
+    const t = e.target.closest(".tab[data-t]");
+    if (!t) return;
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+    t.classList.add("active");
+    const which = t.dataset.t;
+    $("#tab-stream").style.display = which === "stream" ? "" : "none";
+    const r = $("#tab-report");
+    if (r) r.style.display = which === "report" ? "" : "none";
+  });
+}
+function bindTabs() {}
+
+/* ================= approvals dock ================= */
+function registerApprovals(sessionId, ids) {
+  if (ids.length === 0) { S.approvals.delete(sessionId); return; }
+  const prev = S.approvals.get(sessionId) ?? [];
+  const merged = ids.map((id) => prev.find((p) => p.id === id) ?? { id });
+  S.approvals.set(sessionId, merged);
+  renderDock();
+}
+
+function renderDock() {
+  const total = [...S.approvals.values()].reduce((n, l) => n + l.length, 0);
+  $("#dockBadge").style.display = total ? "" : "none";
+  $("#dockBadge").textContent = total;
+  if (total === 0) { $("#dock").innerHTML = ""; return; }
+  let html = "";
+  for (const [sid, list] of S.approvals) {
+    for (const p of list) {
+      html += `
+      <div class="apcard">
+        <h4>⚑ Approval needed</h4>
+        <div class="kv">mission …${shortId(sid)}</div>
+        <div class="args">tool_call_id: ${esc(p.id ?? "?")}</div>
+        <div class="btns">
+          <button class="btn-deny" onclick="UI.decide('${sid}','${p.id}','deny')">Deny</button>
+          <button class="btn-allow" onclick="UI.decide('${sid}','${p.id}','allow')">Allow →</button>
+        </div>
+      </div>`;
+    }
+  }
+  $("#dock").innerHTML = html;
+}
+
+async function decide(sessionId, toolCallId, status) {
+  try {
+    await api(`/v1/sessions/${sessionId}/turns`, {
+      method: "POST",
+      body: { stream: false, input: [{ type: "user.tool_approval", threadId: "main", toolCallId: toolCallId, approval: { status } }] },
+    });
+    const list = S.approvals.get(sessionId) ?? [];
+    S.approvals.set(sessionId, list.filter((p) => p.id !== toolCallId));
+    renderDock();
+    if (S.currentMission === sessionId) pollMission();
+    if (status === "deny") {
+      await api(`/v1/sessions/${sessionId}/turns`, {
+        method: "POST",
+        body: { stream: false, input: [{ type: "user.message", content: "Approval denied by operator. Continue with passive findings only and note the denial in the report." }] },
+      });
+    }
+  } catch (err) { alert("decision failed: " + err.message); }
+}
+
+/* ================= scope + audit views ================= */
+async function showScope() {
+  setView("scope"); $("#title").textContent = "Scope manager";
+  const raw = await guardRpc("tools/call", { name: "scope_list", arguments: {} });
+  let d = {}; try { d = JSON.parse(raw); } catch {}
+  $("#view").innerHTML =
+    `<h3 style="margin-bottom:8px">Permanent allowlist</h3>
+     <table class="kv">${(d.allow ?? []).map((e) => `<tr><td>◉</td><td>${esc(e)}</td><td style="color:var(--green)">permanent</td></tr>`).join("")}</table>
+     <h3 style="margin:16px 0 8px">Temporary (autonomous bootstrap)</h3>
+     ${(d.temporary ?? []).length
+       ? `<table class="kv">${d.temporary.map((t) => `<tr><td>◌</td><td>${esc(t.entry)}</td><td style="color:var(--amber)">expires ${esc(t.expires_at.slice(11,19))}</td></tr>`).join("")}</table>`
+       : `<p class="dim">none live</p>`}
+     <p class="dim" style="margin-top:14px;font-size:12px">Mutations via agent require approval; temporary entries self-expire ≤60 min.</p>`;
+}
+
+async function showAudit() {
+  setView("audit"); $("#title").textContent = "Guard audit log";
+  const raw = await guardRpc("tools/call", { name: "audit_read", arguments: { limit: 80 } });
+  let d = {}; try { d = JSON.parse(raw); } catch {}
+  $("#view").innerHTML =
+    `<table class="kv" style="width:100%">
+      <tr><th>time</th><th>actor</th><th>auth</th><th>action</th><th>verdict</th><th>reason</th></tr>
+      ${(d.entries ?? []).map((e) => `
+        <tr>
+          <td>${esc(e.ts.slice(11, 19))}</td><td>${esc(e.actor)}</td><td>${esc(e.auth ?? "—")}</td>
+          <td>${esc(e.action)}</td>
+          <td style="color:${e.verdict === "allowed" ? "var(--green)" : e.verdict === "denied" ? "var(--red)" : "var(--amber)"}">${esc(e.verdict)}</td>
+          <td>${esc(e.reason)}</td>
+        </tr>`).join("")}
+    </table>`;
+}
+
+/* ================= new mission ================= */
+async function startMission() {
+  const prompt = $("#mPrompt").value.trim();
+  if (!prompt) return;
+  const s = await api("/v1/sessions", { method: "POST", body: { agent: { name: $("#mAgent").value } } });
+  UI.closeModal();
+  UI.openMission(s.data.id);
+  await api(`/v1/sessions/${s.data.id}/turns`, { method: "POST", body: { stream: false, input: [{ type: "user.message", content: prompt }] } });
+}
+
+/* ================= shell ================= */
+function setView(v) {
+  S.view = v;
+  document.querySelectorAll(".nav[data-view]").forEach((n) => n.classList.toggle("active", n.dataset.view === v));
+  const titles = { board: "Missions", mission: "Mission workspace", approvals: "Approvals", scope: "Scope manager", audit: "Guard audit log" };
+  $("#title").textContent = titles[v] ?? v;
+}
+document.querySelectorAll(".nav[data-view]").forEach((n) =>
+  n.addEventListener("click", () => {
+    const v = n.dataset.view;
+    if (v === "scope") return showScope();
+    if (v === "audit") return showAudit();
+    if (v === "approvals") return renderDock();
+    setView(v); renderBoard();
+  })
+);
+
+const UI = {
+  openNewMission: () => ($("#modalWrap").style.display = "flex"),
+  closeModal: () => ($("#modalWrap").style.display = "none"),
+  startMission,
+  openMission,
+  backToBoard: () => { S.currentMission = null; setView("board"); renderBoard(); },
+  decide,
+  showAudit,
+};
+window.UI = UI;
+
+/* heartbeat */
+async function tick() {
+  await refreshMissions();
+  if (S.view === "mission") pollMission();
+  $("#hSync").textContent = "sync " + new Date().toLocaleTimeString();
+}
+tick();
+setInterval(tick, 4000);
+</script>
+</body>
+</html>
