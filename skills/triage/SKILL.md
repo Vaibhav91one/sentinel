@@ -50,6 +50,11 @@ Also emit machine-readable `artifacts/<host>.report.json`:
 {"host":"...","generated_at":"...","findings":[{"id":"CVE-...","severity":"high","title":"...","evidence_ref":"artifacts/x.jsonl#12","verified":true,"fix":"..."}]}
 ```
 
+## Wrap-up rule
+
+The final ranked report MUST be delivered as a pure-text answer with zero
+further tool calls. Reference artifact paths instead of re-reading them.
+
 ## Rules
 
 - Never invent CVEs. If correlation is empty, say so plainly — a clean report
