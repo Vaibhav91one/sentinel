@@ -230,17 +230,29 @@ function normalizeEntry(entry: string): string | null {
     if (octets.every((o) => o <= 255) && bits <= 32) return s; // strict IPv4 CIDR
     return null;
   }
-  // IPv6 literal, optionally bracketed and with a port: "::1", "[::1]", "[::1]:8080"
-  // Stored bare (no brackets, no port) so list/match comparisons stay simple;
-  // a port on an unbracketed v6 literal is ambiguous and therefore rejected.
-  if (/^\[[0-9a-f:]+\](?::\d{1,5})?$/i.test(s)) {
-    return canonicalV6(s.slice(1, s.indexOf("]")).toLowerCase());
+  // IPv6 literal, optionally bracketed and with a port: "::1", "[::1]", "[::1]:8080".
+  // Bracketed entries keep their port ("[v6]:p"); bare v6 stores no port
+  // (unbracketed v6-with-port is ambiguous and rejected).
+  const bracketed = /^\[([0-9a-f:]+)\](?::(\d{1,5}))?$/i.exec(s);
+  if (bracketed) {
+    if (!parseIPv6(bracketed[1])) return null;
+    const base = canonicalV6(bracketed[1].toLowerCase());
+    if (bracketed[2] !== undefined) {
+      const p = Number(bracketed[2]);
+      if (p < 1 || p > 65535) return null;
+      return `[${base}]:${p}`;
+    }
+    return base;
   }
   if (/^::ffff:\d{1,3}(\.\d{1,3}){3}$/i.test(s)) return s.toLowerCase(); // mapped-v6 dotted
   if (/^[0-9a-f:]+$/i.test(s) && (s.match(/:/g)?.length ?? 0) >= 2) {
     return canonicalV6(s.toLowerCase());
   }
-  if (/^[\w.-]+:\d{1,5}$/i.test(s)) return s.toLowerCase(); // host:port
+  if (/^[\w.-]+:\d{1,5}$/i.test(s)) {
+    const p = Number(s.match(/:(\d{1,5})$/)![1]);
+    if (p < 1 || p > 65535) return null;
+    return s.toLowerCase();
+  }
   if (/^[\w.-]+$/i.test(s)) return s.toLowerCase(); // host
   return null;
 }

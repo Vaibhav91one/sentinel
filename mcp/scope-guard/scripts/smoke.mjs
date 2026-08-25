@@ -179,12 +179,18 @@ check(
   JSON.stringify(h1),
 );
 const h2 = await tool("scope_add", { entry: "[2606:4700:4700::1111]:443" });
-check("bracketed host:port entry accepted", !!h2.allow?.includes("2606:4700:4700::1111"), JSON.stringify(h2));
+check("bracketed host:port entry accepted", !!h2.allow?.includes("[2606:4700:4700::1111]:443"), JSON.stringify(h2));
 const h3 = await tool("scope_check", { target: "http://[2606:4700:4700::1111]:443" });
-check("bracketed host:port target matches", h3.allowed === true && h3.matched === "2606:4700:4700::1111", JSON.stringify(h3));
-await tool("scope_remove", { entry: "2606:4700:4700::1111" });
+check("bracketed host:port target matches", h3.allowed === true && h3.matched === "[2606:4700:4700::1111]:443", JSON.stringify(h3));
+const h3b = await tool("scope_check", { target: "http://[2606:4700:4700::1111]:8080" });
+check("different v6 port denied", h3b.allowed === false, JSON.stringify(h3b));
+await tool("scope_remove", { entry: "[2606:4700:4700::1111]:443" });
 const h4 = await tool("scope_add", { entry: "1:2:3:4:5:6:1.2.3.4" });
 check("embedded v4 tail rejected in parser", typeof h4.error === "string" && h4.error.includes("not a valid"), JSON.stringify(h4));
+for (const bad of ["example.com:0", "example.com:65536", "example.com:99999"]) {
+  const hb = await tool("scope_add", { entry: bad });
+  check(`invalid port refused (${bad})`, typeof hb.error === "string" && hb.error.includes("not a valid"), JSON.stringify(hb));
+}
 
 // cleanup
 await tool("scope_remove", { entry: "*.nip.io" });
