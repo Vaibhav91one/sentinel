@@ -30,8 +30,11 @@ find_asset() {
 
 TAG=""
 ASSET=""
-for TAG_CAND in $(curl -sSL https://api.github.com/repos/juice-shop/juice-shop/releases?per_page=10 \
-                    | grep -oE '"tag_name": "[^"]+"' | cut -d'"' -f4); do
+# Releases atom feed lives on github.com itself -> stays inside default scope
+# (api.github.com is a separate host and deliberately NOT allow-listed).
+RELEASES_FEED="https://github.com/juice-shop/juice-shop/releases.atom"
+for TAG_CAND in $(curl -sSL "$RELEASES_FEED" \
+                    | grep -oE 'releases/tag/[^<]+' | sed 's#releases/tag/##'); do
   ASSET=$(find_asset "$TAG_CAND")
   if [ -n "$ASSET" ]; then TAG="$TAG_CAND"; break; fi
 done
