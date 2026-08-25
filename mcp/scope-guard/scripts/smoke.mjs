@@ -161,6 +161,19 @@ check("IPv6 target matches scoped entry", v3.allowed === true && v3.matched === 
 const v4 = await tool("scope_remove", { entry: "2606:4700:4700::1111" });
 check("IPv6 entry removable", v4.removed === true, JSON.stringify(v4));
 
+// Offline: invalid hextets rejected; bracketed host:port round-trips
+const h1 = await tool("scope_add", { entry: "1:2:3:4:5:6:7:10000" });
+check(
+  "oversized hextet rejected",
+  typeof h1.error === "string" && (h1.error.includes("not a valid") || h1.error.includes("hard-denied")),
+  JSON.stringify(h1),
+);
+const h2 = await tool("scope_add", { entry: "[2606:4700:4700::1111]:443" });
+check("bracketed host:port entry accepted", !!h2.allow?.includes("2606:4700:4700::1111"), JSON.stringify(h2));
+const h3 = await tool("scope_check", { target: "http://[2606:4700:4700::1111]:443" });
+check("bracketed host:port target matches", h3.allowed === true && h3.matched === "2606:4700:4700::1111", JSON.stringify(h3));
+await tool("scope_remove", { entry: "2606:4700:4700::1111" });
+
 // cleanup
 await tool("scope_remove", { entry: "*.nip.io" });
 await tool("scope_remove", { entry: "10.50.77.0/24" });

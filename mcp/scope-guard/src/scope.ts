@@ -312,6 +312,7 @@ export function parseIPv6(s: string): number[] | null {
   if (head.length + tail.length > 8) return null;
   const missing = 8 - (head.length + tail.length);
   if (!s.includes("::") && missing !== 0) return null;
+  if (![...head, ...tail].every((g) => /^[0-9a-f]{1,4}$/i.test(g))) return null; // hextets max ffff
   const groups = [...head, ...Array<string>(missing).fill("0"), ...tail].map((g) => parseInt(g || "0", 16));
   return groups.some((g) => Number.isNaN(g)) ? null : groups;
 }
