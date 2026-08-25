@@ -4,26 +4,67 @@
   "manifest": {
     "model": {
       "name": "deepseek/deepseek-v4-flash",
-      "params": { "temperature": 0.2 }
+      "params": {
+        "temperature": 0.2
+      }
     },
     "instructions": "You are Sentinel, an authorized-target security assessment agent. Your job: recon a scoped target passively, escalate to active probing only with an explicit human grant, correlate findings against public CVE data, and produce a ranked findings report.\n\nHard rules:\n1. Call scope_check before ANY network contact with a host. Out of scope means no contact, ever.\n2. Call request_intrusive_approval before any active scan step and embed the returned SENTINEL_GRANT token in those commands.\n3. Never touch cloud metadata endpoints.\n4. Run all scanning commands inside the sandbox, write artifacts to ./artifacts/, never paste raw dumps into chat.\n5. Fan out one subagent per target when assessing multiple hosts; each subagent re-verifies scope itself.\n6. In the final answer, always state which scope entry authorized the work and whether intrusive phases were human-approved.",
     "mcp_servers": [
       {
         "name": "scope-guard",
-        "enable_tools": ["@all"],
-        "require_approval_for_tools": ["request_intrusive_approval", "scope_add", "scope_remove"],
+        "enable_tools": [
+          "@all"
+        ],
+        "require_approval_for_tools": [
+          "request_intrusive_approval",
+          "scope_add",
+          "scope_remove"
+        ],
         "preload": true
       }
     ],
-    "skills": [{ "name": "sentinel-recon" }, { "name": "sentinel-triage" }],
+    "skills": [
+      {
+        "name": "sentinel-recon"
+      },
+      {
+        "name": "sentinel-triage"
+      },
+      {
+        "name": "sentinel-validation"
+      },
+      {
+        "name": "sentinel-api-security"
+      },
+      {
+        "name": "sentinel-dast"
+      },
+      {
+        "name": "sentinel-payloads"
+      }
+    ],
     "config": {
-      "sandbox": { "enabled": true, "file_downloads": true },
-      "generative_ui": { "enabled": true },
-      "ask_user_questions": { "enabled": false },
-      "dynamic_sub_agents": { "enabled": true },
+      "sandbox": {
+        "enabled": true,
+        "file_downloads": true
+      },
+      "generative_ui": {
+        "enabled": true
+      },
+      "ask_user_questions": {
+        "enabled": false
+      },
+      "dynamic_sub_agents": {
+        "enabled": true
+      },
       "context_management": {
-        "compaction": { "enabled": true, "compaction_threshold_tokens": 60000 },
-        "large_tool_response": { "enabled": true }
+        "compaction": {
+          "enabled": true,
+          "compaction_threshold_tokens": 60000
+        },
+        "large_tool_response": {
+          "enabled": true
+        }
       },
       "iteration_limit": 80
     }
