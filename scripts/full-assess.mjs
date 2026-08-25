@@ -36,10 +36,12 @@ async function runTurn(input) {
         console.log(`  [tool] ${event.name ?? event.tool_name ?? "?"}`, JSON.stringify(event.arguments ?? {}).slice(0, 120));
         break;
       case "tool.approval_required": {
-        console.log("  [approval] PAUSED - needs human:", JSON.stringify(event.toolCalls ?? event.tool_calls ?? event).slice(0, 200));
         const calls = event.toolCalls ?? event.tool_calls ?? [];
-        if (event.toolCallId ?? event.tool_call_id) pending.push(event.toolCallId ?? event.tool_call_id);
-        for (const c of calls) pending.push(c.id ?? c.toolCallId ?? c.tool_call_id);
+        console.log(`  [approval] PAUSED - ${calls.length} call(s) need human`);
+        for (const c of calls) {
+          const cid = c.id ?? c.toolCallId ?? c.tool_call_id;
+          if (cid && !pending.includes(cid)) pending.push(cid);
+        }
         break;
       }
       case "model.message":
@@ -78,10 +80,15 @@ const PROMPT = process.env.ASSESS_PROMPT ??
 await runTurn([{ type: "user.message", content: PROMPT }]);
 
 while (pending.length > 0) {
-  const id = pending.shift();
-  const decision = AUTO === "allow" ? { status: "allow" } : { status: "deny", reason: "demo deny pass" };
-  console.log(`  [drive] resuming tool_call ${id} -> ${AUTO}`);
-  await runTurn([{ type: "user.tool_approval", threadId: "main", toolCallId: id, approval: decision }]);
+  // resolve ALL pending approvals in one batch - harness requires it
+  const batch = pending.splice(0).map((cid) => ({
+    type: "user.tool_approval",
+    threadId: "main",
+    toolCallId: cid,
+    approval: AUTO === "allow" ? { status: "allow" } : { status: "deny", reason: "demo deny pass" },
+  }));
+  console.log(`  [drive] resuming ${batch.length} approval(s) -> ${AUTO}`);
+  await runTurn(batch);
 }
 console.log("[drive] complete");
 await checkpoint("run total");
