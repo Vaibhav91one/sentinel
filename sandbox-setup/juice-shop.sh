@@ -19,35 +19,58 @@ echo "[js] $(date -Is) starting" > "$STATUS"
 
 # ---------- 1. fetch latest linux_x64 packaged release ----------
 cd /tmp
-TAG=$(curl -sSL -o /dev/null -w '%{url_effective}' https://github.com/juice-shop/juice-shop/releases/latest | sed 's#.*/tag/##')
-[ -n "$TAG" ] && [ "$TAG" != "latest" ] || fail "could not resolve latest release tag"
-ASSET=$(curl -sSL "https://github.com/juice-shop/juice-shop/releases/expanded_assets/$TAG" \
-        | grep -oE 'href="[^"]*linux_x64\.zip"' | head -1 | sed 's/^href="//; s/"$//')
-[ -n "$ASSET" ] || fail "no linux_x64.zip asset for $TAG"
+# Resolve newest tag whose assets include a Linux build (zip OR tgz).
+# Upstream v20.2.0 dropped Linux zips entirely; older tags ship .tgz.
+find_asset() {
+  local tag="$1"
+  curl -sSL "https://github.com/juice-shop/juice-shop/releases/expanded_assets/$tag" \
+    | grep -oE 'href="[^"]*(linux_x64\.(zip|tgz)|linux_x64.tar\.gz)"' \
+    | sed 's/^href="//; s/"$//' | head -1
+}
+
+TAG=""
+ASSET=""
+for TAG_CAND in $(curl -sSL https://api.github.com/repos/juice-shop/juice-shop/releases?per_page=10 \
+                    | grep -oE '"tag_name": "[^"]+"' | cut -d'"' -f4); do
+  ASSET=$(find_asset "$TAG_CAND")
+  if [ -n "$ASSET" ]; then TAG="$TAG_CAND"; break; fi
+done
+[ -n "$ASSET" ] || fail "no linux_x64 asset found across last 10 releases"
+
 URL="https://github.com$ASSET"
 ASSET_FILE=$(basename "$ASSET")
+echo "[js] selected $TAG -> $ASSET_FILE" | tee -a "$STATUS" "$LOG"
 
-echo "[js] downloading $ASSET_FILE" | tee -a "$STATUS" "$LOG"
 curl -sSL --retry 3 -o "$ASSET_FILE" "$URL" 2>>"$LOG" || fail "download failed"
 
-# ---------- 2. unpack ----------
+# ---------- 2. unpack (zip or tgz) ----------
 rm -rf "$DIR"; mkdir -p "$DIR"
-unzip -q "$ASSET_FILE" -d "$DIR" 2>>"$LOG" || fail "unzip failed"
+case "$ASSET_FILE" in
+  *.zip) unzip -q "$ASSET_FILE" -d "$DIR" 2>>"$LOG" || fail "unzip failed" ;;
+  *.tgz|*.tar.gz) tar xzf "$ASSET_FILE" -C "$DIR" 2>>"$LOG" || fail "untar failed" ;;
+  *) fail "unknown archive format: $ASSET_FILE" ;;
+esac
 cd "$DIR" || fail "unpack dir missing"
+# flatten single top-level dir if present
+if [ -d "$DIR"/juice-shop_* ] && [ ! -f "$DIR"/package.json ]; then
+  cd "$DIR"/juice-shop_* || fail "flatten failed"
+fi
 
 # ---------- 3. locate a runtime ----------
 # Packaged builds usually bundle their own Node runtime; fall back to system node.
-NODE_BIN=""
+ENTRY=$(find . -maxdepth 3 \( -path ./node_modules -o -path ./*/node_modules \) -prune -o -type f -name app.js -print 2>/dev/null | head -1)
+BUNDLED_NODE=$(find . -maxdepth 4 -type f -name node -path "*bin*" 2>/dev/null | head -1)
+
 if [ -x "./juice-shop" ]; then
   RUN=(./juice-shop)
-elif [ -x "./node/bin/node" ]; then
-  NODE_BIN=./node/bin/node; RUN=("$NODE_BIN" build/app.js)   # older packaging layout
-elif [ -f "build/app.js" ]; then
-  RUN=(node build/app.js)
+elif [ -n "$BUNDLED_NODE" ] && [ -n "$ENTRY" ]; then
+  echo "[js] using bundled runtime: $BUNDLED_NODE" >> "$LOG"
+  RUN=("$BUNDLED_NODE" "$ENTRY")
+elif [ -n "$ENTRY" ]; then
+  command -v node >/dev/null 2>&1 || fail "no entrypoint runtime (system node missing)"
+  RUN=(node "$ENTRY")
 else
-  APPJS=$(find . -maxdepth 2 -name "app.js" | head -1)
-  [ -n "$APPJS" ] || fail "no entrypoint found (no juice-shop bin, node/, or app.js)"
-  RUN=(node "$APPJS")
+  fail "no entrypoint found (no juice-shop bin, bundled node, or app.js)"
 fi
 
 # ensure *a* node exists for the fallback paths
