@@ -114,6 +114,102 @@ function buildServer(): McpServer {
   );
 
   server.registerTool(
+    "http_probe",
+    {
+      title: "Scoped HTTP relay (black-box transport)",
+      description:
+        "Host-side HTTP transport for BLACK-BOX targets the sandbox cannot reach (restricted egress). "
+        + "The request executes on the HOST after mandatory scope validation - every call is scope-checked and audited. "
+        + "HTTP/HTTPS GET/POST/HEAD/OPTIONS only; redirects are RETURNED (not followed - re-probe the Location URL so each hop is re-scoped); "
+        + "response bodies capped at 32 KB; no raw TCP, no port scanning. For deep exploitation continue inside the sandbox lab.",
+      inputSchema: {
+        url: z.string().describe("Absolute http(s) URL to probe"),
+        method: z.enum(["GET", "POST", "HEAD", "OPTIONS"]).default("GET").optional(),
+        headers: z.record(z.string()).optional().describe("Extra request headers"),
+        body: z.string().max(16384).optional().describe("Request body (POST only)"),
+        timeout_seconds: z.number().int().min(3).max(30).optional().describe("Default 15"),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async ({ url, method, headers, body, timeout_seconds }) => {
+      const m = (method ?? "GET").toUpperCase();
+      const verdict = await scope.check(url);
+
+      const auditAndReturn = (result: CallToolResult, v: "allowed" | "denied", reason: string) => {
+        audit.append({
+          actor: "agent",
+          auth: AUTH_MODE,
+          action: "http_probe",
+          args: { url, method: m },
+          verdict: v,
+          reason,
+        });
+        return result;
+      };
+
+      if (!verdict.allowed) {
+        return auditAndReturn(
+          text({ probed: false, error: `scope denial: ${verdict.reason}` }),
+          "denied",
+          verdict.reason,
+        );
+      }
+
+      // scheme lock
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return auditAndReturn(text({ probed: false, error: "invalid URL" }), "denied", "invalid URL");
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return auditAndReturn(text({ probed: false, error: "only http/https schemes allowed" }), "denied", "scheme");
+      }
+
+      const started = Date.now();
+      const ctrl = AbortSignal.timeout((timeout_seconds ?? 15) * 1000);
+      const doFetch = (): Promise<Response> =>
+        fetch(parsed.toString(), {
+          method: m,
+          headers: { "user-agent": "Sentinel-Relay/0.2", ...(headers ?? {}) },
+          body: m === "POST" && body !== undefined ? body : undefined,
+          redirect: "manual", // every hop must be re-scoped by the caller
+          signal: ctrl,
+        });
+
+      return doFetch()
+        .then(async (res) => {
+          const ab = await res.arrayBuffer();
+          const cap = Math.min(ab.byteLength, 32768);
+          const preview = Buffer.from(ab.slice(0, cap)).toString("utf8");
+          const hdrs = Object.fromEntries([...res.headers.entries()].slice(0, 40));
+          const ms = Date.now() - started;
+          return auditAndReturn(
+            text({
+              probed: true,
+              status: res.status,
+              location: res.headers.get("location") ?? null,
+              headers: hdrs,
+              body_bytes: ab.byteLength,
+              body_preview: preview,
+              truncated: ab.byteLength > cap,
+              elapsed_ms: ms,
+              note: res.status >= 300 && res.status < 400
+                ? "redirect returned unfollowed - scope_check the Location target before continuing"
+                : undefined,
+            }),
+            "allowed",
+            `HTTP ${res.status} in ${ms}ms`,
+          );
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          return auditAndReturn(text({ probed: false, error: `transport failure: ${msg}` }), "denied", msg);
+        });
+    },
+  );
+
+  server.registerTool(
     "scope_add_temporary",
     {
       title: "Add temporary bootstrap scope",

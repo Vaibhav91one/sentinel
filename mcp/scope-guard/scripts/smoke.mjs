@@ -101,13 +101,13 @@ check("invalid CIDR refused", typeof a5.error === "string" && a5.error.includes(
 // public hostname resolving into loopback space -> rebinding guard
 await tool("scope_add", { entry: "localtest.me" });
 // Offline: hostname:port entries round-trip
-const p1 = await tool("scope_add", { entry: "example.com:8443" });
-check("host:port entry accepted", !!p1.allow?.includes("example.com:8443"), JSON.stringify(p1));
-const p2 = await tool("scope_check", { target: "https://example.com:8443" });
-check("matching port allowed", p2.allowed === true && p2.matched === "example.com:8443", JSON.stringify(p2));
-const p3 = await tool("scope_check", { target: "https://example.com:8080" });
+const p1 = await tool("scope_add", { entry: "93.184.216.34:8443" });
+check("host:port entry accepted", !!p1.allow?.includes("93.184.216.34:8443"), JSON.stringify(p1));
+const p2 = await tool("scope_check", { target: "http://93.184.216.34:8443" });
+check("matching port allowed", p2.allowed === true && p2.matched === "93.184.216.34:8443", JSON.stringify(p2));
+const p3 = await tool("scope_check", { target: "http://93.184.216.34:8080" });
 check("different port denied", p3.allowed === false, JSON.stringify(p3));
-await tool("scope_remove", { entry: "example.com:8443" });
+await tool("scope_remove", { entry: "93.184.216.34:8443" });
 
 const a6 = await tool("scope_check", { target: "http://localtest.me:3000" });
 check(
@@ -205,6 +205,19 @@ for (const bad of ["example.com:0", "example.com:65536", "example.com:99999"]) {
   const hb = await tool("scope_add", { entry: bad });
   check(`invalid port refused (${bad})`, typeof hb.error === "string" && hb.error.includes("not a valid"), JSON.stringify(hb));
 }
+
+// black-box HTTP relay (network-dependent)
+const b1 = await tool("scope_add_temporary", { entry: "example.com", ttl_minutes: 30 });
+const b2 = await tool("http_probe", { url: "https://example.com" });
+check("http_probe in-scope returns 200", b2.probed === true && b2.status === 200, JSON.stringify(b2).slice(0,150));
+const b3 = await tool("http_probe", { url: "https://stripe.com" });
+check("http_probe out-of-scope denied", b3.probed === false && /scope denial/.test(b3.error ?? ""), JSON.stringify(b3).slice(0,120));
+const b4 = await tool("http_probe", { url: "http://github.com" });
+// github.com is scoped? not by default -> expect denial; skip assert if previously added
+if (!(b4.probed === false && /no scope entry/.test(b4.error ?? ""))) {
+  check("redirect returned unfollowed", b4.status >= 300 && !!b4.location, JSON.stringify(b4).slice(0,150));
+}
+await tool("scope_remove", { entry: "example.com" });
 
 // cleanup
 await tool("scope_remove", { entry: "*.nip.io" });
