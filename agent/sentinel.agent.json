@@ -41,6 +41,12 @@
       },
       {
         "name": "sentinel-payloads"
+      },
+      {
+        "name": "sentinel-firmware"
+      },
+      {
+        "name": "sentinel-mobile"
       }
     ],
     "config": {

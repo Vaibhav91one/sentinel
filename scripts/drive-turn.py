@@ -133,11 +133,10 @@ def main():
             open(f"/tmp/drive-final-{args.sid[-8:]}.md", "w").write(txt)
             return
 
-        key = tuple(sorted(pend_ids)) if pend_ids else None
-        if key and key == last_approved:
-            print(f"[{rnd}] same approval already sent - resolved; nudging")
-            pend_ids, threads = [], []
-        if pend_ids:
+        # NOTE: required_actions persist on historical turn.done records even
+        # after resolution - never skip approving based on dedupe alone.
+        # Instead: attempt the approval; if the harness rejects it as already
+        # resolved, fall through to nudge/completion handling.
             last_approved = key or last_approved
             use_deny = args.deny_first and not denied_once
             print(f"[{rnd}] {'DENY' if use_deny else 'ALLOW'} x{len(pend_ids)}")
