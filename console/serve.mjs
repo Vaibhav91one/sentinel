@@ -14,6 +14,31 @@ const PORT = Number(process.env.PORT ?? 8792);
 const HARNESS = process.env.HARNESS ?? "http://localhost:8790";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)));
 const GUARD = process.env.GUARD ?? "http://127.0.0.1:9930";
+// Console access token. When set, every request must present it as a
+// `sentineltok` cookie (set via /login) or `Authorization: Bearer` header;
+// the same GUARD_TOKEN is injected upstream to the scope-guard.
+const CONSOLE_TOKEN = process.env.CONSOLE_TOKEN ?? "";
+const GUARD_TOKEN = process.env.GUARD_TOKEN ?? "";
+
+function parseCookies(req) {
+  const out = {};
+  for (const part of (req.headers.cookie ?? "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > -1) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+function consoleAuthed(req) {
+  if (!CONSOLE_TOKEN) return true;
+  if (parseCookies(req)["sentineltok"] === CONSOLE_TOKEN) return true;
+  return req.headers["authorization"] === `Bearer ${CONSOLE_TOKEN}`;
+}
+const LOGIN_PAGE = `<!doctype html><html><body style="font-family:sans-serif;background:#0d1117;color:#e6edf3;display:flex;height:100vh;align-items:center;justify-content:center">
+<form method="GET" action="/login" style="background:#161b22;padding:28px;border-radius:12px;border:1px solid #30363d">
+<h2>Sentinel Console</h2><p style="color:#8b949e">access token required</p>
+<input name="token" type="password" placeholder="access token" style="display:block;width:260px;padding:8px;margin:10px 0;border-radius:7px;border:1px solid #30363d;background:#0d1117;color:#e6edf3">
+<button style="width:100%;padding:8px;background:#58a6ff;border:none;border-radius:7px;font-weight:600">Enter</button>
+</form></body></html>`;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -25,6 +50,30 @@ const MIME = {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  // ---- console login ----
+  if (url.pathname === "/login") {
+    if (!CONSOLE_TOKEN || url.searchParams.get("token") === CONSOLE_TOKEN) {
+      res.writeHead(302, {
+        "set-cookie": `sentineltok=${encodeURIComponent(url.searchParams.get("token") ?? CONSOLE_TOKEN)}; HttpOnly; SameSite=Strict; Path=/`,
+        location: "/",
+      });
+      res.end();
+    } else {
+      res.writeHead(401, { "content-type": "text/html" }).end(LOGIN_PAGE.replace("type=\"password\"","type=\"password\" value=\"\"\""));
+    }
+    return;
+  }
+
+  // ---- console access gate ----
+  if (!consoleAuthed(req)) {
+    if (req.method === "GET" && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/guard/")) {
+      res.writeHead(401, { "content-type": "text/html" }).end(LOGIN_PAGE);
+    } else {
+      res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized - open /login?token=<your-token>" }));
+    }
+    return;
+  }
 
   // ---- proxy /api/* -> harness ----
   if (url.pathname.startsWith("/api/")) {
@@ -52,9 +101,15 @@ const server = createServer(async (req, res) => {
     try {
       const chunks = [];
       for await (const c of req) chunks.push(c);
+      const fwdHeaders = {
+        "content-type": req.headers["content-type"] ?? "application/json",
+        accept: req.headers.accept ?? "*/*",
+      };
+      if (req.headers["authorization"]) fwdHeaders["authorization"] = String(req.headers["authorization"]);
+      else if (GUARD_TOKEN && consoleAuthed(req)) fwdHeaders["authorization"] = `Bearer ${GUARD_TOKEN}`;
       const upstream = await fetch(GUARD + "/mcp", {
         method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+        headers: fwdHeaders,
         body: Buffer.concat(chunks),
       });
       const ct = upstream.headers.get("content-type") ?? "application/json";
@@ -86,6 +141,13 @@ const server = createServer(async (req, res) => {
     res.writeHead(404);
     res.end("not found");
   }
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[sentinel-console] uncaught:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[sentinel-console] unhandled rejection:", err);
 });
 
 server.listen(PORT, "127.0.0.1", () => {

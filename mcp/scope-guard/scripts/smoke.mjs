@@ -18,10 +18,13 @@ function check(label, cond, detail) {
   }
 }
 
+const GT = process.env.GUARD_TOKEN;
+const AUTH = GT ? { authorization: `Bearer ${GT}` } : {};
+
 async function rpc(method, params) {
   const res = await fetch(BASE, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...AUTH },
     body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
   });
   const ct = res.headers.get("content-type") ?? "";
