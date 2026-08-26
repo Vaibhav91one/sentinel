@@ -4,6 +4,12 @@
 
 log() { echo "[lab] $*" >> "${LAB_LOG:-/tmp/lab.log}"; }
 
+# Pre-baked image fast-path: when the sandbox already ships the lab stack
+# (custom snapshot/image with /opt/sentinel-lab/.prebaked), every bootstrap
+# becomes a no-op.
+PREBAKED=""
+[ -f /opt/sentinel-lab/.prebaked ] && PREBAKED=1 && export PATH="/opt/node22/bin:$PATH"
+
 fail_lab() {
   echo "FAILED $1" > "$LAB_STATUS"
   echo "--- log tail ---" >> "$LAB_STATUS"
@@ -13,6 +19,7 @@ fail_lab() {
 
 # Ensure a usable Node.js (22 via official tarball from nodejs.org).
 ensure_node22() {
+  [ -n "$PREBAKED" ] && { log "prebaked image: node assumed present"; return 0; }
   command -v node >/dev/null 2>&1 && { log "system node $(node -v)"; return 0; }
   log "bootstrapping Node 22 from nodejs.org/dist"
   local NV
