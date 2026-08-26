@@ -61,6 +61,25 @@ Examples: Juice Shop release zip, your own microservice repo, any internal
 tool source the operator hands over. Scanner + target stay co-located in one
 disposable cloud VM regardless of stack.
 
+## Phase 0b — black-box targets (no source, restricted sandbox egress)
+
+For internet-facing targets you cannot self-host: use the host-side relay tool.
+
+```text
+http_probe {url, method?, headers?, body?}
+```
+
+Doctrine:
+1. Target not in scope → expect denial → `scope_add_temporary` the hostname
+   (operator pre-authorization assumed for black-box missions) → re-check.
+2. Probe with http_probe (GET/POST/HEAD). Redirects come back UNFOLLOWED with
+   a Location header — scope_check / probe the new URL explicitly so every hop
+   is re-authorized.
+3. Responses capped at 32 KB; full bodies stay in evidence notes.
+4. LIMITATION: HTTP(S) transport only — no port sweeps or raw TCP through the
+   relay. Deep exploitation of reachable web targets still uses in-sandbox lab
+   mode; document which path each finding came from.
+
 ## Phase 1 — passive fingerprint (no approval needed)
 
 Run in the sandbox:
