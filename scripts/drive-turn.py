@@ -73,16 +73,17 @@ def main():
         running = newest != "turn.done"
         # pending approvals: latest turn.done required_actions OR live tool.response_required
         pend_ids, threads = [], []
+        # events are newest-first (evs[0] is newest); required_actions persist on
+        # historical turn.done records after resolution, so only the NEWEST
+        # turn.done reflects live pending approvals - never an older one.
         td = [e["event"] for e in evs if e["event"]["type"] == "turn.done"]
-        for t in reversed(td):                      # newest done first
-            ra = t.get("state", {}).get("required_actions") or []
-            if ra:
-                for r in ra:
-                    th = r.get("thread_id") or r.get("threadId") or "main"
-                    for c in r.get("tool_calls") or []:
-                        cid = c.get("id") or c.get("toolCallId")
-                        pend_ids.append(cid); threads.append(th)
-                break
+        if td:
+            ra = td[0].get("state", {}).get("required_actions") or []
+            for r in ra:
+                th = r.get("thread_id") or r.get("threadId") or "main"
+                for c in r.get("tool_calls") or []:
+                    cid = c.get("id") or c.get("toolCallId")
+                    pend_ids.append(cid); threads.append(th)
         qr = [e["event"] for e in evs if e["event"]["type"] == "tool.response_required"]
         qids = []
         if qr:
@@ -133,10 +134,11 @@ def main():
             open(f"/tmp/drive-final-{args.sid[-8:]}.md", "w").write(txt)
             return
 
-        # NOTE: required_actions persist on historical turn.done records even
-        # after resolution - never skip approving based on dedupe alone.
-        # Instead: attempt the approval; if the harness rejects it as already
-        # resolved, fall through to nudge/completion handling.
+        # Approve only when nothing is actively running: a running turn means the
+        # newest turn.done's required_actions were already resolved (they persist
+        # on the record), so re-approving would spam the harness with stale calls.
+        if pend_ids and not running:
+            key = tuple(sorted(pend_ids))
             last_approved = key or last_approved
             use_deny = args.deny_first and not denied_once
             print(f"[{rnd}] {'DENY' if use_deny else 'ALLOW'} x{len(pend_ids)}")
