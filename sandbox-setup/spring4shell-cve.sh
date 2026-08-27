@@ -7,8 +7,22 @@ STATUS=/tmp/spring_status.txt; LOG=/tmp/spring.log; PORT="${1:-8080}"
 SRC=/tmp/sentinel/target/spring4shell-cve-lab
 fail(){ echo "FAILED $1" > "$STATUS"; tail -30 "$LOG" >> "$STATUS" 2>/dev/null; exit 1; }
 log(){ echo "[spring4shell] $*" >> "$LOG"; echo "[spring4shell] $*" > "$STATUS"; }
+
+# Docker isn't guaranteed present in every sandbox instance (confirmed absent
+# at least twice this session, even though docker-in-sandbox is supported) -
+# try installing it before failing outright.
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 && return 0
+  log "docker missing, attempting apt install docker.io"
+  apt-get update -qq >>"$LOG" 2>&1 && apt-get install -y -qq docker.io >>"$LOG" 2>&1 || return 1
+  command -v dockerd >/dev/null 2>&1 || return 1
+  nohup dockerd >>"$LOG" 2>&1 &
+  for i in $(seq 1 20); do docker info >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
+
 : > "$LOG"; echo "[spring4shell] $(date -Is) start" > "$STATUS"
-command -v docker >/dev/null 2>&1 || fail "docker missing"
+ensure_docker || fail "docker unavailable even after apt install docker.io fallback"
 [ -d "$SRC" ] || fail "lab source not found at $SRC"
 log "docker build spring4shell-lab (maven build + tomcat)"
 docker build -t spring4shell-lab -f "$SRC/Dockerfile" "$SRC" >>"$LOG" 2>&1 || fail "docker build failed"

@@ -15,8 +15,22 @@ SUPERUSER_TOKEN="sentinel-lab-fixed-token-do-not-use-in-prod"
 
 fail() { echo "FAILED $1" > "$STATUS"; tail -30 "$LOG" >> "$STATUS" 2>/dev/null; exit 1; }
 log()  { echo "[teamcity] $*" >> "$LOG"; echo "[teamcity] $*" > "$STATUS"; }
+
+# Docker isn't guaranteed present in every sandbox instance (confirmed absent
+# at least twice this session, even though docker-in-sandbox is supported) -
+# try installing it before failing outright.
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 && return 0
+  log "docker missing, attempting apt install docker.io"
+  apt-get update -qq >>"$LOG" 2>&1 && apt-get install -y -qq docker.io >>"$LOG" 2>&1 || return 1
+  command -v dockerd >/dev/null 2>&1 || return 1
+  nohup dockerd >>"$LOG" 2>&1 &
+  for i in $(seq 1 20); do docker info >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
+
 : > "$LOG"; echo "[teamcity] $(date -Is) start" > "$STATUS"
-command -v docker >/dev/null 2>&1 || fail "docker missing (needs docker-in-sandbox)"
+ensure_docker || fail "docker unavailable even after apt install docker.io fallback"
 docker rm -f teamcity-cve >/dev/null 2>&1 || true
 
 log "docker run jetbrains/teamcity-server:2023.11.3 on :$PORT (pulls ~1.6GB), memory-tuned"

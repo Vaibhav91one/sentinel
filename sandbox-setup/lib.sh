@@ -10,6 +10,20 @@ log() { echo "[lab] $*" >> "${LAB_LOG:-/tmp/lab.log}"; }
 PREBAKED=""
 [ -f /opt/sentinel-lab/.prebaked ] && PREBAKED=1 && export PATH="/opt/node22/bin:$PATH"
 
+# Docker isn't guaranteed present in every sandbox instance (confirmed absent
+# at least twice across missions this session, even though docker-in-sandbox
+# is supported) - try installing it before the caller fails outright.
+ensure_docker() {
+  [ -n "$PREBAKED" ] && command -v docker >/dev/null 2>&1 && { log "prebaked image: docker present"; return 0; }
+  command -v docker >/dev/null 2>&1 && return 0
+  log "docker missing, attempting apt install docker.io"
+  apt-get update -qq >>"${LAB_LOG}" 2>&1 && apt-get install -y -qq docker.io >>"${LAB_LOG}" 2>&1 || return 1
+  command -v dockerd >/dev/null 2>&1 || return 1
+  nohup dockerd >>"${LAB_LOG}" 2>&1 &
+  for i in $(seq 1 20); do docker info >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
+
 fail_lab() {
   echo "FAILED $1" > "$LAB_STATUS"
   echo "--- log tail ---" >> "$LAB_STATUS"

@@ -9,8 +9,22 @@ set -uo pipefail
 STATUS=/tmp/confluence_status.txt; LOG=/tmp/confluence.log; PORT=8090
 SRC=/tmp/sentinel/target/confluence-cve-lab
 fail(){ echo "FAILED $1" > "$STATUS"; tail -30 "$LOG" >> "$STATUS" 2>/dev/null; exit 1; }
+
+# Docker isn't guaranteed present in every sandbox instance (confirmed absent
+# at least twice this session, even though docker-in-sandbox is supported) -
+# try installing it before failing outright.
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 && return 0
+  echo "[confluence] docker missing, attempting apt install docker.io" >> "$LOG"
+  apt-get update -qq >>"$LOG" 2>&1 && apt-get install -y -qq docker.io >>"$LOG" 2>&1 || return 1
+  command -v dockerd >/dev/null 2>&1 || return 1
+  nohup dockerd >>"$LOG" 2>&1 &
+  for i in $(seq 1 20); do docker info >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
+
 : > "$LOG"; echo "[confluence] $(date -Is) start" > "$STATUS"
-command -v docker >/dev/null 2>&1 || fail "docker missing"
+ensure_docker || fail "docker unavailable even after apt install docker.io fallback"
 [ -d "$SRC" ] || fail "lab source not found at $SRC"
 (cd "$SRC" && docker compose up -d) >>"$LOG" 2>&1 || fail "docker compose up failed"
 for i in $(seq 1 72); do sleep 5   # 6 min — Confluence is very slow to start

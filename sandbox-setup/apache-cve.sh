@@ -13,8 +13,21 @@ SRC=/tmp/sentinel/target/apache-cve-lab
 fail() { echo "FAILED $1" > "$STATUS"; tail -30 "$LOG" >> "$STATUS" 2>/dev/null; exit 1; }
 log()  { echo "[apache-cve] $*" >> "$LOG"; echo "[apache-cve] $*" > "$STATUS"; }
 
+# Docker isn't guaranteed present in every sandbox instance (confirmed absent
+# at least twice this session, even though docker-in-sandbox is supported) -
+# try installing it before failing outright.
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 && return 0
+  log "docker missing, attempting apt install docker.io"
+  apt-get update -qq >>"$LOG" 2>&1 && apt-get install -y -qq docker.io >>"$LOG" 2>&1 || return 1
+  command -v dockerd >/dev/null 2>&1 || return 1
+  nohup dockerd >>"$LOG" 2>&1 &
+  for i in $(seq 1 20); do docker info >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
+
 : > "$LOG"; echo "[apache-cve] $(date -Is) start" > "$STATUS"
-command -v docker >/dev/null 2>&1 || fail "docker missing (this lab needs docker-in-sandbox)"
+ensure_docker || fail "docker unavailable even after apt install docker.io fallback"
 [ -d "$SRC" ] || fail "lab source not found at $SRC (clone the sentinel repo first)"
 
 log "docker build apache-cve-lab:vuln (httpd 2.4.49)"
