@@ -84,14 +84,22 @@ Some challenges are infeasible for an autonomous CLI agent. Mark them
 - CSP/interaction challenges needing a real user to click a live victim page.
 - Mobile **dynamic** (Frida/objection) without a device/emulator.
 
-DOM XSS is NO LONGER auto-blocked: the image prebakes headless `chromium`.
-Render the post-JS DOM and grep for your marker instead of blocking:
+DOM XSS is NO LONGER auto-blocked: the image prebakes headless `chromium`
+(verified working: a `location.hash` → `innerHTML` sink payload executed and
+mutated `document.title`, captured correctly in the dumped DOM). Prefer a
+payload that MUTATES something observable post-load (title, a new attribute,
+an appended node) over a bare `alert()` — headless has no dialog to catch, but
+a DOM mutation shows up in `--dump-dom` unambiguously. Render the post-JS DOM
+and grep for your marker instead of blocking:
 
 ```bash
-chromium --headless --no-sandbox --disable-gpu --dump-dom \
-  "<url>#<payload with SENTINEL_MARKER>" > artifacts/<id>.dom.html
+chromium --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --dump-dom \
+  "<url>#<img src=x onerror=document.title='SENTINEL_MARKER'>" > artifacts/<id>.dom.html
 grep -q SENTINEL_MARKER artifacts/<id>.dom.html && echo CONFIRMED
 ```
+`--disable-dev-shm-usage` avoids a crash on the sandbox's small `/dev/shm`.
+Stderr `dbus`/`NameHasOwner` lines are harmless noise (no session bus in a
+minimal container) — not a failure signal, ignore them.
 
 ## 6. Loop, then wrap up
 
