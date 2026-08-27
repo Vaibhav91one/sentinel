@@ -121,9 +121,28 @@ def main():
         {"stream": False, "input": [{"type": "user.message", "content": args.message}]})
     print(f"[start] HTTP {code}")
 
+    def newest_id():
+        evs = events_all()
+        return evs[0]["event"].get("id") if evs else None
+
+    # Staleness gate: a single "not running" snapshot is unreliable (event
+    # pagination/timing can show a stale prior turn.done as newest while the
+    # mission is genuinely still mid-flight). Nudging or sending the empty-
+    # input completion signal into a session that's actually still running
+    # gets the in-progress turn CANCELLED by the harness - observed repeatedly
+    # (TeamCity, Drupal missions). Require the newest event id to be IDENTICAL
+    # across several consecutive polls before treating the session as idle.
+    STABLE_ROUNDS = 3
+    last_id = None
+    stable = 0
+
     last_approved = None
     for rnd in range(1, args.max_rounds + 1):
         time.sleep(args.poll)
+
+        nid = newest_id()
+        stable = stable + 1 if nid == last_id else 0
+        last_id = nid
 
         # 422 hint from previous action? resolve exactly those first
         running, pend_ids, threads, qids, txt = state()
@@ -157,7 +176,14 @@ def main():
             print(f"[{rnd}] mission actively running - waiting")
             continue
 
-        # idle, no final text, nothing pending -> nudge a few times, then signal completion
+        # "not running" read but not yet confirmed stable across multiple polls -
+        # could be a pagination/timing blip on a genuinely still-active turn.
+        # Wait it out rather than risk nudging/cancelling real work.
+        if stable < STABLE_ROUNDS:
+            print(f"[{rnd}] idle read not yet stable ({stable}/{STABLE_ROUNDS}) - waiting")
+            continue
+
+        # idle, no final text, nothing pending, CONFIRMED stable -> nudge a few times, then signal completion
         if nudges < 2:
             nudges += 1
             print(f"[{rnd}] nudging ({nudges}/2)")
