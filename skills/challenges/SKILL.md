@@ -80,10 +80,18 @@ Some challenges are infeasible for an autonomous CLI agent. Mark them
 `blocked` with a one-line reason and move on — never fake a solve:
 
 - Crypto/hash-cracking with real work factor, timing side-channels.
-- Browser-rendered DOM XSS / CSP challenges needing a live JS engine + user
-  interaction (no headless browser in the sandbox).
 - Challenges requiring external services, email, or real payment.
+- CSP/interaction challenges needing a real user to click a live victim page.
 - Mobile **dynamic** (Frida/objection) without a device/emulator.
+
+DOM XSS is NO LONGER auto-blocked: the image prebakes headless `chromium`.
+Render the post-JS DOM and grep for your marker instead of blocking:
+
+```bash
+chromium --headless --no-sandbox --disable-gpu --dump-dom \
+  "<url>#<payload with SENTINEL_MARKER>" > artifacts/<id>.dom.html
+grep -q SENTINEL_MARKER artifacts/<id>.dom.html && echo CONFIRMED
+```
 
 ## 6. Loop, then wrap up
 

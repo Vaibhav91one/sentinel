@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       php-cli php-mysqli php-gd \
       mariadb-server mariadb-client \
       nmap sqlmap perl \
+      chromium \
       squashfs-tools cpio \
       iputils-ping net-tools procps psmisc \
       default-jre-headless \
