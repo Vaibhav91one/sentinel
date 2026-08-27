@@ -52,9 +52,16 @@ Known limits, stated honestly:
   (roadmap).
 - The guard cannot see HTTP redirects made inside the sandbox (the recon skill
   forbids following them off-target).
-- The grant token is **procedural** — commands are expected to embed
-  `SENTINEL_GRANT`, and `verify_grant` records consumption, but nothing
-  network-level forces it yet. Treat it as auditable consent, not enforcement.
+- The grant token is **procedural by default** — commands are expected to embed
+  `SENTINEL_GRANT`, and `verify_grant` records consumption, but nothing forces
+  it unless you opt in. A real network-enforcement path exists: set
+  `EGRESS_PROXY_PORT` on the guard to run an HTTP(S) forward proxy that
+  re-validates scope at the *moment of connecting* (closes DNS-rebinding
+  TOCTOU) and checks an `X-Sentinel-Grant` header against the live grant store
+  per connection (closes network enforcement) — but wiring the sandbox's
+  egress through it and having tools attach the header are separate
+  integration steps not done by default. Until both are wired in, treat grants
+  as auditable consent, not enforcement.
 - Trust boundary: without `GUARD_TOKEN` set (and matching header auth on the
   TrueForge connector), any local process can call the guard. Set
   `REQUIRE_GUARD_TOKEN=1` to make intrusive grants fail closed when that

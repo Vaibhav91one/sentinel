@@ -1,5 +1,5 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { connect as tcpConnect } from "node:net";
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { connect as tcpConnect, type Socket } from "node:net";
 import crypto from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -710,3 +710,124 @@ httpServer.listen(PORT, "127.0.0.1", () => {
     console.warn(`[${NAME}] WARNING: GUARD_TOKEN not set - any local process can call this server. Set it (and header auth on the TrueForge connector) for anything beyond local dev.`);
   }
 });
+
+/**
+ * EGRESS PROXY (opt-in, EGRESS_PROXY_PORT unset = off, no behavior change to
+ * existing deployments). This is the roadmap item referenced throughout this
+ * codebase's comments and SECURITY.md R3/R7: grants and scope_check are
+ * currently ADVISORY - a tool call that skips them isn't network-blocked, and
+ * scope is validated at scope_check TIME, not at the moment a connection
+ * actually opens (a rebinding window).
+ *
+ * When wired as the sandbox's HTTP_PROXY/HTTPS_PROXY (integration step, not
+ * done by this file alone - see docs), every outbound connection is forced
+ * through here, where scope.check() runs FRESH at the actual moment of
+ * connecting (the check and the connect are the same atomic operation - no
+ * TOCTOU window, closing R7 for any traffic that goes through it), and an
+ * X-Sentinel-Grant header, if present, is validated+consumed against the same
+ * grant store verify_grant uses (closing R3: a presented grant is now
+ * cryptographically checked at the network layer, not just advisory).
+ *
+ * Traffic WITHOUT a grant header still passes on scope alone (unchanged
+ * baseline for passive recon) - this proxy does not yet know which
+ * connections are "the approved intrusive one" vs. passive traffic; making
+ * grant presentation MANDATORY for intrusive-shaped traffic is a doctrine/
+ * skills change (always attach the header for active-phase commands), not
+ * something inferable from a bare host:port.
+ */
+const EGRESS_PROXY_PORT = process.env.EGRESS_PROXY_PORT ? Number(process.env.EGRESS_PROXY_PORT) : undefined;
+
+if (EGRESS_PROXY_PORT) {
+  const proxyAudit = (target: string, v: "allowed" | "denied", reason: string) =>
+    audit.append({ actor: "egress-proxy", auth: AUTH_MODE, action: "egress_connect", args: { target }, verdict: v, reason });
+
+  /** Fresh scope + (if presented) grant check, run at the moment of connecting. */
+  const authorizeConnect = async (
+    target: string,
+    grantToken: string | undefined,
+  ): Promise<{ ok: boolean; reason: string }> => {
+    const verdict = await scope.check(target);
+    if (!verdict.allowed) {
+      proxyAudit(target, "denied", `scope: ${verdict.reason}`);
+      return { ok: false, reason: `scope denial: ${verdict.reason}` };
+    }
+    if (grantToken) {
+      const g = consumeGrant(grantToken, normalizeTargetValue(target) ?? target);
+      if (!g.valid) {
+        proxyAudit(target, "denied", `grant: ${g.reason}`);
+        return { ok: false, reason: `grant denial: ${g.reason}` };
+      }
+    }
+    proxyAudit(target, "allowed", grantToken ? "scope + grant verified at connect time" : "scope verified at connect time (no grant presented)");
+    return { ok: true, reason: "ok" };
+  };
+
+  const proxyServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+    // Plain HTTP proxying (absolute-form request-target, RFC 7230 §5.3.2).
+    // HTTPS goes through CONNECT tunneling below, not this path.
+    req.on("error", () => {}); // client aborts mid-request must not crash the process
+    res.on("error", () => {});
+    void (async () => {
+      let target: URL;
+      try {
+        target = new URL(req.url ?? "");
+      } catch {
+        res.writeHead(400).end("bad request: expected absolute-form proxy request");
+        return;
+      }
+      const grantToken = req.headers["x-sentinel-grant"] as string | undefined;
+      const auth = await authorizeConnect(target.host, grantToken);
+      if (!auth.ok) {
+        res.writeHead(403, { "content-type": "text/plain" }).end(auth.reason);
+        return;
+      }
+      const upstream = httpRequest(
+        target,
+        { method: req.method, headers: { ...req.headers, host: target.host } },
+        (upRes) => {
+          res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+          upRes.pipe(res);
+        },
+      );
+      upstream.on("error", (err) => {
+        if (!res.headersSent) res.writeHead(502).end(`upstream error: ${err.message}`);
+      });
+      req.pipe(upstream);
+    })();
+  });
+
+  proxyServer.on("connect", (req: IncomingMessage, clientSocket: Socket, head: Buffer) => {
+    // A raw net.Socket crashes the whole process on an unhandled 'error'
+    // event unless a listener is attached SYNCHRONOUSLY, before any await -
+    // a client aborting mid-scope-check (or after a deny) otherwise takes
+    // down the guard. Attach this first, unconditionally.
+    let remote: Socket | undefined;
+    clientSocket.on("error", () => remote?.destroy());
+
+    void (async () => {
+      const target = req.url ?? ""; // CONNECT target-form is exactly "host:port"
+      const grantToken = req.headers["x-sentinel-grant"] as string | undefined;
+      const auth = await authorizeConnect(target, grantToken);
+      if (!auth.ok) {
+        if (!clientSocket.destroyed) clientSocket.end(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\n${auth.reason}`);
+        return;
+      }
+      const [host, portStr] = target.split(":");
+      const port = Number(portStr) || 443;
+      remote = tcpConnect(port, host, () => {
+        if (clientSocket.destroyed) { remote?.destroy(); return; }
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length) remote!.write(head);
+        remote!.pipe(clientSocket);
+        clientSocket.pipe(remote!);
+      });
+      remote.on("error", (err) => {
+        if (!clientSocket.destroyed) clientSocket.end(`HTTP/1.1 502 Bad Gateway\r\n\r\n${err.message}`);
+      });
+    })();
+  });
+
+  proxyServer.listen(EGRESS_PROXY_PORT, "127.0.0.1", () => {
+    console.log(`[${NAME}] egress proxy listening on http://127.0.0.1:${EGRESS_PROXY_PORT} (opt-in enforcement layer)`);
+  });
+}

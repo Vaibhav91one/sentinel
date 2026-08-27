@@ -6,11 +6,11 @@ Status legend: **ENFORCED** · **DOCUMENTED-RESIDUAL** (accepted, tracked) · **
 |----|------|--------|-------|
 | R1 | Console/harness unauthenticated access | **MITIGATED** | `CONSOLE_TOKEN` cookie/bearer gate on console; harness should run bound to localhost or behind OIDC when shared |
 | R2 | Local processes can reach scope-guard | **MITIGATED** | `GUARD_TOKEN` bearer enforced by guard; TrueForge connector holds the same secret. `REQUIRE_GUARD_TOKEN=1` fails closed all mutations |
-| R3 | Grant tokens not network-enforced | **DOCUMENTED-RESIDUAL** | Consent bookkeeping only. Roadmap: sandbox egress proxy validating tokens per connection |
+| R3 | Grant tokens not network-enforced | **PARTIAL — mechanism built, integration pending** | `EGRESS_PROXY_PORT` (opt-in) forward proxy validates a presented `X-Sentinel-Grant` header against the real grant store per connection (7/7 tests passing). Not yet the default: nothing routes sandbox egress through it, and tools don't attach the header yet. Without those two integration steps, grants remain advisory in practice - the enforcement code exists and works, it isn't wired in |
 | R4 | Secret management plaintext | **PARTIAL** | `.env` + harness SQLite; no KMS/rotation. Rotate any key that transits chat/shared channels |
 | R5 | Sandbox isolation class unverified | **DOCUMENTED-RESIDUAL** | Daytona Tier-1 internals unpublished. Obtain vendor confirmation or migrate runtime (OpenSandbox evaluated) |
 | R6 | `http_probe` host-side SSRF surface | **MITIGATED** | Scope-checked per request incl. DNS rebinding defense; scheme lock; redirects unfollowed; size caps; depends on R2 being armed |
-| R7 | TOCTOU DNS re-resolution window | **DOCUMENTED-RESIDUAL** | Check-time resolution narrows rebinding; connection-time re-resolution possible. Egress proxy closes it |
+| R7 | TOCTOU DNS re-resolution window | **PARTIAL — mechanism built, integration pending** | The same `EGRESS_PROXY_PORT` proxy runs `scope.check()` at the actual moment of connecting (check and connect are one atomic operation, structurally closing the window) - for any traffic that goes through it. Same integration gap as R3: nothing forces sandbox egress through the proxy yet |
 | R8 | Prompt-injection evolution | **TESTED-PARTIAL** | Tripwire attack resisted live; sophisticated multi-stage injection untested. Validation skill = procedural control |
 | R9 | Target-data confidentiality vs model providers | Inherent | Probe content transits the configured LLM provider. Disclose to target owners |
 | R10 | Audit tamper-evidence | **MITIGATED** | sha256 hash-chain per entry (`prev`+`hash`); local file edits detectable. Host-root tampering still possible |
