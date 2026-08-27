@@ -19,6 +19,7 @@ Status legend: **ENFORCED** · **DOCUMENTED-RESIDUAL** (accepted, tracked) · **
 | R13 | Driver edge cases for cold users | Improved twice | drive-turn v3 handles running-state, batches, subagent threads |
 | R14 | Prebaked-image fast-path unexercised | Code + Dockerfile ready | Needs registry/build access |
 | R15 | Sandbox install supply chain | Pinned versions | npm/pip/apt drift residual |
+| R16 | Lab-mode multi-use grants | **OPT-IN, off by default** | `SENTINEL_LAB_MODE=1` trades per-action human consent for throughput so one approval clears a full challenge sweep. Scoped to **loopback targets only**; non-loopback ignores it; every use still hash-chain audited. Enable only for intentionally-vulnerable labs you own — never for real targets |
 
 ## Disclosure posture
 

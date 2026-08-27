@@ -59,6 +59,20 @@ Known limits, stated honestly:
   TrueForge connector), any local process can call the guard. Set
   `REQUIRE_GUARD_TOKEN=1` to make intrusive grants fail closed when that
   invariant cannot be verified.
+- `SENTINEL_LAB_MODE=1` (off by default) lets one approval mint a multi-use,
+  60-min grant for **loopback lab targets only**, so a subagent can clear a full
+  challenge sweep without pausing per challenge. It trades per-action consent for
+  throughput — enable it only for intentionally-vulnerable labs you own. Every
+  use is still recorded in the hash-chained audit log; non-loopback targets keep
+  single-use, human-gated grants regardless of the flag.
+
+The prebaked lab image (`sandbox-setup/Dockerfile`) ships the exploitation
+toolchain so missions skip runtime installs: `sqlmap nuclei ffuf gobuster httpx
+dalfox nikto jwt_tool testssl.sh wfuzz arjun` (web), `binwalk unblob firmwalker`
+(firmware), `jadx apktool androguard apkleaks mobsfscan` (mobile). Build it with
+`container build -t sentinel-lab sandbox-setup/` (or `docker build`) and point
+the sandbox at the image; the `/opt/sentinel-lab/.prebaked` marker makes
+`lib.sh` skip bootstrapping.
 
 **You are responsible for only scanning targets you own or have written
 permission to test.** The default scope is `localhost` so the demo target is
