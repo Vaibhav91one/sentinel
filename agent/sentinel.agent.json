@@ -29,6 +29,9 @@
         "name": "sentinel-challenges"
       },
       {
+        "name": "sentinel-cve-lab-construction"
+      },
+      {
         "name": "sentinel-triage"
       },
       {
