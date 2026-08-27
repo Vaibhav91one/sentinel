@@ -135,6 +135,39 @@ Detector + lab: `target/apache-cve-lab/detect.sh <base-url>` (file-read + RCE,
 exit 0/1); boot with `sandbox-setup/apache-cve.sh` (docker httpd:2.4.49).
 Patched at 2.4.51 (2.4.50 was incomplete → -42013). Works via `http_probe`.
 
+### CVE-2024-27198 — JetBrains TeamCity auth bypass → RCE (Critical, CISA KEV)
+
+Reach any authenticated REST endpoint unauth via the alternate-path trick:
+`/hax?jsp=/app/rest/<endpoint>;.jsp` (the `;.jsp` suffix passes the public-
+resource check; the real endpoint executes). Read-only detection:
+```bash
+curl -s "<url>/hax?jsp=/app/rest/server;.jsp"     # returns server version JSON/XML => VULN
+```
+Full impact: POST to `/hax?jsp=/app/rest/users;.jsp` creates a SYSTEM_ADMIN
+(lab only). Detector + lab: `target/teamcity-cve-lab/detect.sh <base-url>`
+(read-only, never creates a user); boot `sandbox-setup/teamcity-cve.sh`
+(jetbrains/teamcity-server:2023.11.3). Patched at 2023.11.4. Works via `http_probe`.
+
+### CVE-2022-22965 — Spring4Shell RCE (Critical)
+
+Data-binding RCE on Spring MVC 5.3.x/5.2.x + WAR + Tomcat + JDK 9+. The
+`class.module.classLoader.resources.context.parent.pipeline.first.*` gadget
+writes a JSP webshell into Tomcat's ROOT, then `GET /shell.jsp?cmd=id`.
+Detector + lab: `target/spring4shell-cve-lab/detect.sh <base-url> [/greeting]`
+(writes a random-named JSP, runs `id`, exit 0/1); boot with
+`sandbox-setup/spring4shell-cve.sh` (multi-stage Maven→Tomcat build).
+Patched at Spring 5.3.18 / 5.2.20. Needs a data-binding endpoint (POJO param).
+
+### CVE-2023-22515 — Confluence broken access control (Critical, CISA KEV)
+
+Unauth: flip `applicationConfig.setupComplete=false` via `/server-info.action`,
+re-opening the setup wizard, then create a SYSTEM admin at
+`/setup/setupadministrator.action`. Affected 8.0.0–8.5.1 (fixed 8.5.2).
+Detector + lab: `target/confluence-cve-lab/detect.sh <base-url>` (flips the flag
+and confirms the wizard re-opens; does NOT create an admin — state-changing, lab
+only); bring up with `sandbox-setup/confluence-cve.sh` (Confluence needs a
+one-time trial-license setup — not headless).
+
 ## Usage rules
 
 - One payload class per probe batch; log every request to artifacts.
