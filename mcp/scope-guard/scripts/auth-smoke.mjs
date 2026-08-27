@@ -123,6 +123,29 @@ try {
   check("grant is single-use (reuse rejected)", v2.valid === false, JSON.stringify(v2));
   const v3 = await callTool(C, "verify_grant", { token: cGrant.grant_token, target: "http://localhost:3000" });
   check("spent grant rejected even for new target", v3.valid === false, JSON.stringify(v3));
+
+  // Instance D: SENTINEL_LAB_MODE=1 -> loopback grants become multi-use; others unchanged
+  const D = 9934;
+  procs.push(start(D, { SENTINEL_LAB_MODE: "1" }));
+  check("D boots", await waitHealth(D), `port ${D} never became healthy`);
+
+  // loopback target: multi-use grant, 60-min TTL, reusable across a sweep
+  const dLab = await callTool(D, "request_intrusive_approval", { target: "http://localhost:3000", action: "full challenge sweep" });
+  check("lab-mode loopback grant mints", dLab.approved === true && typeof dLab.grant_token === "string", JSON.stringify(dLab).slice(0, 160));
+  check("lab-mode grant advertises multi-use + 60min", dLab.expires_in_minutes === 60 && /LAB-MODE/.test(dLab.note ?? ""), JSON.stringify(dLab).slice(0, 200));
+  const dv1 = await callTool(D, "verify_grant", { token: dLab.grant_token, target: "http://localhost:3000" });
+  check("lab-mode grant valid on first use", dv1.valid === true, JSON.stringify(dv1));
+  const dv2 = await callTool(D, "verify_grant", { token: dLab.grant_token, target: "http://localhost:3000" });
+  check("lab-mode grant STILL valid on reuse (multi-use)", dv2.valid === true && /multi-use/.test(dv2.reason ?? ""), JSON.stringify(dv2));
+
+  // non-loopback target under lab-mode: flag ignored, stays single-use
+  await callTool(D, "scope_add", { entry: "10.0.0.5" });
+  const dPriv = await callTool(D, "request_intrusive_approval", { target: "http://10.0.0.5:8080", action: "private sweep" });
+  check("lab-mode non-loopback grant mints single-use (30/10min)", dPriv.approved === true && dPriv.expires_in_minutes === 10, JSON.stringify(dPriv).slice(0, 200));
+  const dp1 = await callTool(D, "verify_grant", { token: dPriv.grant_token, target: "http://10.0.0.5:8080" });
+  check("non-loopback grant valid once", dp1.valid === true, JSON.stringify(dp1));
+  const dp2 = await callTool(D, "verify_grant", { token: dPriv.grant_token, target: "http://10.0.0.5:8080" });
+  check("non-loopback grant single-use under lab-mode (reuse rejected)", dp2.valid === false, JSON.stringify(dp2));
 } finally {
   for (const p of procs) p.kill();
 }

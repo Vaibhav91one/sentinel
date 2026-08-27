@@ -538,6 +538,15 @@ function classify(hostPort: string): TargetClass {
  * Split host[:port] without mangling IPv6 literals ("::1" is a host, not
  * "host : port"). Bracketed forms "[::1]" / "[::1]:8080" are unwrapped.
  */
+/**
+ * Loopback targets (localhost, 127.0.0.0/8, ::1) are the only hosts eligible
+ * for lab-mode multi-use grants - the sandbox runs its lab apps on localhost.
+ * Everything else keeps single-use production posture regardless of LAB_MODE.
+ */
+export function isLoopbackTarget(target: string): boolean {
+  return classify(normalizeTargetValue(target) ?? target) === "loopback";
+}
+
 export function splitHostPort(s: string): { host: string; port?: string } {
   const x = s.trim();
   if (x.startsWith("[")) {

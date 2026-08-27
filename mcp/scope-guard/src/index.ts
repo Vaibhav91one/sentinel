@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { Scope, defaultScopeFile, normalizeTargetValue } from "./scope.js";
+import { Scope, defaultScopeFile, normalizeTargetValue, isLoopbackTarget } from "./scope.js";
 import { Audit, defaultAuditFile } from "./audit.js";
 
 const NAME = "sentinel-scope-guard";
@@ -47,6 +47,16 @@ const FAIL_CLOSED_MSG =
  */
 const AUTH_MODE = GUARD_TOKEN ? "bearer-verified" : "open-local";
 
+/**
+ * SENTINEL_LAB_MODE=1 lets a single human approval mint a multi-use, longer-TTL
+ * grant for LOOPBACK lab targets only, so a subagent can clear a full challenge
+ * sweep on one approval instead of pausing per challenge. Off by default =
+ * unchanged production posture (single-use, human-gated, 10 min). Every use is
+ * still audited via the hash-chained log. Non-loopback targets ignore this flag.
+ */
+const LAB_MODE = process.env.SENTINEL_LAB_MODE === "1";
+const LAB_GRANT_TTL_MS = 60 * 60 * 1000; // 60 min for lab sweeps
+
 const scope = new Scope(defaultScopeFile());
 const audit = new Audit(defaultAuditFile());
 
@@ -56,13 +66,15 @@ interface Grant {
   target: string;
   action: string;
   expires_at: number;
+  multi_use: boolean; // lab-mode loopback grants survive verification until TTL
 }
 const grants = new Map<string, Grant>();
 const GRANT_TTL_MS = 10 * 60 * 1000;
 
-function mintGrant(target: string, action: string): string {
+function mintGrant(target: string, action: string, multiUse = false): string {
   const token = crypto.randomUUID().replace(/-/g, "");
-  grants.set(token, { token, target, action, expires_at: Date.now() + GRANT_TTL_MS });
+  const ttl = multiUse ? LAB_GRANT_TTL_MS : GRANT_TTL_MS;
+  grants.set(token, { token, target, action, expires_at: Date.now() + ttl, multi_use: multiUse });
   return token;
 }
 
@@ -78,6 +90,11 @@ export function consumeGrant(token: string, target: string): { valid: boolean; r
   // (token, target) pair consumes the single use.
   if (g.target !== target) {
     return { valid: false, reason: `grant was issued for ${g.target}, not ${target} (grant remains active)` };
+  }
+  // Lab-mode grants are multi-use: they stay valid for their whole TTL so one
+  // approval covers a full challenge sweep. Production grants are single-use.
+  if (g.multi_use) {
+    return { valid: true, reason: `lab-mode grant for "${g.action}" on ${g.target} (multi-use until expiry)` };
   }
   grants.delete(token);
   return { valid: true, reason: `human-approved grant for "${g.action}" on ${g.target}` };
@@ -335,21 +352,25 @@ function buildServer(): McpServer {
         });
       }
       const canonicalTarget = normalizeTargetValue(target) ?? target;
-      const token = mintGrant(canonicalTarget, action);
+      const labGrant = LAB_MODE && isLoopbackTarget(canonicalTarget);
+      const token = mintGrant(canonicalTarget, action, labGrant);
+      const ttlMin = (labGrant ? LAB_GRANT_TTL_MS : GRANT_TTL_MS) / 60000;
       audit.append({
         actor: "human-via-agent",
         auth: AUTH_MODE,
         action: "intrusive_request",
         // fingerprint only - audit_read must never expose redeemable grant material
-        args: { target: canonicalTarget, action, grant: `${token.slice(0, 8)}…` },
+        args: { target: canonicalTarget, action, grant: `${token.slice(0, 8)}…`, lab_mode: labGrant },
         verdict: "allowed",
-        reason: `human Allow/Deny enforced upstream by the harness checkpoint on this call; in-scope verified, single-use grant minted (${GRANT_TTL_MS / 60000} min)${GUARD_TOKEN ? "" : "; WARNING: no GUARD_TOKEN set - boundary open to local callers"}`,
+        reason: `human Allow/Deny enforced upstream by the harness checkpoint on this call; in-scope verified, ${labGrant ? `lab-mode multi-use grant minted (${ttlMin} min, loopback target)` : `single-use grant minted (${ttlMin} min)`}${GUARD_TOKEN ? "" : "; WARNING: no GUARD_TOKEN set - boundary open to local callers"}`,
       });
       const result: Record<string, unknown> = {
         approved: true,
         grant_token: token,
-        expires_in_minutes: GRANT_TTL_MS / 60000,
-        note: "single-use; embed as SENTINEL_GRANT=<token> in the command and confirm with verify_grant (network-layer enforcement is roadmap)",
+        expires_in_minutes: ttlMin,
+        note: labGrant
+          ? "LAB-MODE multi-use grant (loopback target): reusable for a full challenge sweep until expiry; embed as SENTINEL_GRANT=<token> and confirm each use with verify_grant"
+          : "single-use; embed as SENTINEL_GRANT=<token> in the command and confirm with verify_grant (network-layer enforcement is roadmap)",
       };
       if (!GUARD_TOKEN) {
         result.warning =
