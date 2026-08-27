@@ -76,9 +76,15 @@ Doctrine:
    a Location header — scope_check / probe the new URL explicitly so every hop
    is re-authorized.
 3. Responses capped at 32 KB; full bodies stay in evidence notes.
-4. LIMITATION: HTTP(S) transport only — no port sweeps or raw TCP through the
-   relay. Deep exploitation of reachable web targets still uses in-sandbox lab
-   mode; document which path each finding came from.
+4. Non-HTTP black-box protocol (SMTP, Redis, a raw banner grab, etc.)? Use
+   `tcp_probe {host, port, data_base64?, timeout_seconds?}` — same scope-check
+   and audit discipline as http_probe, one connect+optional-write+capped-read,
+   response returned as UTF-8 preview + base64 exact bytes. This is a single-
+   connection primitive, not a port scanner — one call touches one host:port;
+   for a sweep, loop it or use nmap inside the sandbox.
+5. LIMITATION: no port sweeps through either relay tool. Deep exploitation of
+   reachable web targets still uses in-sandbox lab mode; document which path
+   each finding came from.
 
 ## Phase 1 — passive fingerprint (no approval needed)
 

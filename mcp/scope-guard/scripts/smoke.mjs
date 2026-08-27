@@ -245,6 +245,30 @@ check(
   JSON.stringify(td),
 );
 
+// tcp_probe: raw TCP relay for non-HTTP protocols. Self-contained echo
+// server (no external fixture) so this test never depends on anything
+// being up on the host.
+const { createServer: createTcpServer } = await import("node:net");
+const echoPort = await new Promise((resolve) => {
+  const srv = createTcpServer((sock) => sock.on("data", (d) => sock.end(d)));
+  srv.listen(0, "127.0.0.1", () => resolve(srv.address().port));
+});
+// (loopback is default-scoped regardless of port - see "loopback default-scoped
+// is allowed" above - so denial must be tested against a genuinely unscoped
+// host, matching http_probe's own out-of-scope test pattern.)
+const tpDenied = await tool("tcp_probe", { host: "stripe.com", port: 443 });
+check("tcp_probe denied when target not in scope", tpDenied.probed === false && /scope denial/.test(tpDenied.error ?? ""), JSON.stringify(tpDenied));
+const payload = Buffer.from("SENTINEL_TCP_PROBE_ECHO").toString("base64");
+const tpOk = await tool("tcp_probe", { host: "127.0.0.1", port: echoPort, data_base64: payload, timeout_seconds: 3 });
+check(
+  "tcp_probe connects, writes, and reads back the echoed bytes",
+  tpOk.probed === true && Buffer.from(tpOk.body_base64 ?? "", "base64").toString("utf8") === "SENTINEL_TCP_PROBE_ECHO",
+  JSON.stringify(tpOk).slice(0, 200),
+);
+
+const tpMeta = await tool("tcp_probe", { host: "169.254.169.254", port: 80 });
+check("tcp_probe hard-denies cloud metadata", tpMeta.probed === false && /cloud metadata/.test(tpMeta.error ?? ""), JSON.stringify(tpMeta));
+
 const audit = await tool("audit_read", { limit: 5 });
 check("audit log records entries", Array.isArray(audit.entries) && audit.entries.length > 0, JSON.stringify(audit).slice(0, 120));
 

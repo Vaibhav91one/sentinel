@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { connect as tcpConnect } from "node:net";
 import crypto from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -223,6 +224,107 @@ function buildServer(): McpServer {
           const msg = err instanceof Error ? err.message : String(err);
           return auditAndReturn(text({ probed: false, error: `transport failure: ${msg}` }), "denied", msg);
         });
+    },
+  );
+
+  server.registerTool(
+    "tcp_probe",
+    {
+      title: "Scoped raw TCP relay (non-HTTP transport)",
+      description:
+        "Host-side raw TCP transport for protocols http_probe can't reach (SMTP, Redis, raw sockets, etc.) - single "
+        + "connect, optional write, capped read, then close. Every call is scope-checked and audited exactly like "
+        + "http_probe. This is a connect+send+recv PRIMITIVE, not a port scanner - one call touches one host:port. "
+        + "Response bytes capped at 32 KB and returned as UTF-8 (best-effort) plus base64 (exact bytes). No raw TCP "
+        + "port sweeps - use nmap inside the sandbox for that; this exists for the single-connection black-box case "
+        + "http_probe's HTTP-only transport can't cover.",
+      inputSchema: {
+        host: z.string().describe("Target hostname or IP (no scheme)"),
+        port: z.number().int().min(1).max(65535),
+        data_base64: z.string().optional().describe("Bytes to write after connecting, base64-encoded"),
+        timeout_seconds: z.number().int().min(1).max(20).optional().describe("Default 8"),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async ({ host, port, data_base64, timeout_seconds }) => {
+      const target = `${host}:${port}`;
+      const verdict = await scope.check(target);
+
+      const auditAndReturn = (result: CallToolResult, v: "allowed" | "denied", reason: string) => {
+        audit.append({
+          actor: "agent",
+          auth: AUTH_MODE,
+          action: "tcp_probe",
+          args: { host, port, wrote_bytes: data_base64 ? Buffer.from(data_base64, "base64").length : 0 },
+          verdict: v,
+          reason,
+        });
+        return result;
+      };
+
+      if (!verdict.allowed) {
+        return auditAndReturn(
+          text({ probed: false, error: `scope denial: ${verdict.reason}` }),
+          "denied",
+          verdict.reason,
+        );
+      }
+
+      const timeoutMs = (timeout_seconds ?? 8) * 1000;
+      const started = Date.now();
+
+      return new Promise<CallToolResult>((resolve) => {
+        const chunks: Buffer[] = [];
+        let total = 0;
+        const CAP = 32768;
+        let settled = false;
+        const finish = (ok: boolean, extra: Record<string, unknown> = {}) => {
+          if (settled) return;
+          settled = true;
+          const buf = Buffer.concat(chunks, Math.min(total, CAP));
+          const ms = Date.now() - started;
+          resolve(
+            auditAndReturn(
+              text({
+                probed: ok,
+                bytes_read: total,
+                body_preview_utf8: buf.toString("utf8"),
+                body_base64: buf.toString("base64"),
+                truncated: total > CAP,
+                elapsed_ms: ms,
+                ...extra,
+              }),
+              ok ? "allowed" : "denied",
+              ok ? `${total} bytes in ${ms}ms` : String(extra.error ?? "connection failed"),
+            ),
+          );
+        };
+
+        const sock = tcpConnect({ host, port, timeout: timeoutMs });
+        sock.on("connect", () => {
+          if (data_base64) {
+            try {
+              sock.write(Buffer.from(data_base64, "base64"));
+            } catch {
+              /* write failure surfaces via 'error' */
+            }
+          }
+        });
+        sock.on("data", (chunk: Buffer) => {
+          if (total < CAP) chunks.push(chunk);
+          total += chunk.length;
+          // give the peer a short quiet window after connect to finish a
+          // one-shot banner/response, then close - this is a single-probe
+          // primitive, not a persistent connection.
+          if (total >= CAP) sock.end();
+        });
+        sock.on("timeout", () => {
+          sock.destroy();
+          finish(true, { note: "read timeout reached (this is the normal end for a probe with no explicit close)" });
+        });
+        sock.on("close", () => finish(true));
+        sock.on("error", (err) => finish(false, { error: err.message }));
+      });
     },
   );
 
