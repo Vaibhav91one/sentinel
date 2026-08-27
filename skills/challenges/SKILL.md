@@ -46,6 +46,31 @@ Most lab apps expose their challenge/level taxonomy — pull it at runtime:
 For anything else: crawl (`gobuster`/`ffuf` + `httpx`) and treat each distinct
 sink as a challenge.
 
+## 2b. Read the target's own source before blind-probing (do this first — highest-leverage step in this whole skill)
+
+DVWA, Juice Shop, VAmPI, and DSVW are all open-source and typically bundled
+inside the running container/sandbox. **When source is available, read it
+before writing a single payload.** This is not cheating — it's what a real
+source-available assessment looks like, and it is dramatically faster than
+trial-and-error probing. One session's Juice Shop run went from 7 confirmed
+challenges to 66 the moment it stopped guessing and started reading the
+server's own solve-condition hooks:
+
+```bash
+# Juice Shop: every challenge's exact trigger condition, verbatim, in source
+grep -rn "challengeUtils.solveIf\|challengeUtils.solve(" routes/ lib/ models/
+# any Express/Flask/Rails/etc target: read the route/controller source
+# directly for validation logic, allowlists, auth middleware order, and the
+# exact sink (e.g. an ORM query built with string concatenation = confirmed
+# SQLi without needing to fuzz for it)
+```
+
+Only fall back to blind probing (fuzzing, payload spraying) when source is
+genuinely unavailable — a real black-box target, a compiled binary, or a
+container that doesn't expose its own code. When it IS available, treat
+"decompile/read source" as the mandatory first move of Phase 2b in
+`sentinel-recon`, not an optional shortcut.
+
 ## 3. Seed the progress artifact
 
 Write one JSON line per challenge to `artifacts/<host>.challenges.jsonl`. This

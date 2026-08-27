@@ -123,6 +123,15 @@ say so in the report. Keep scan rates polite: no `-T5`, no aggressive timing.
 
 ## Phase 2b — deep probes (grant-gated)
 
+**Before writing a payload: is the target's source available?** (bundled in
+the sandbox, an npm/pip package cache, a readable Docker layer, a git clone.)
+If so, read it FIRST — grep for validation logic, allowlists, ORM query
+construction, auth middleware order. This is not a shortcut, it's what a real
+source-available assessment looks like, and it beats blind probing by a wide
+margin (see `sentinel-challenges` §2b for the concrete recipe and the session
+that took a target from 7 to 66 confirmed findings this way). Only fall back
+to blind probing when source is genuinely unavailable.
+
 The prebaked lab image ships the exploitation toolchain — assume these are on
 PATH, no install step: `sqlmap nuclei ffuf gobuster httpx dalfox nikto jwt_tool
 testssl.sh wfuzz arjun` (web), `binwalk unblob firmwalker squashfs-tools`
