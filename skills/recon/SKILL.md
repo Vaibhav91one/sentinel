@@ -115,13 +115,17 @@ say so in the report. Keep scan rates polite: no `-T5`, no aggressive timing.
   `/console`, `/.env`) — max 20 requests, 1s apart.
 - Log every probe to `artifacts/<host>.web.jsonl`.
 
-## Phase 2b — deep probes (optional, grant-gated, if authorized by operator prompt)
+## Phase 2b — deep probes (grant-gated)
 
-When the operator authorizes deeper tooling, you may install INSIDE the sandbox:
-- `pip3 install sqlmap` → automated SQLi confirmation on discovered login/search params:
-  `sqlmap -u "<url>" --data="<params>" --batch --level=2 --risk=2 --output-dir=/tmp/artifacts/sqlmap`
-- Nuclei binary (download linux_amd64 from github releases) → template scan:
-  `nuclei -u <url> -severity low,medium,high,critical -rl 20 -o /tmp/artifacts/nuclei.txt`
+The prebaked lab image ships the exploitation toolchain — assume these are on
+PATH, no install step: `sqlmap nuclei ffuf gobuster httpx dalfox nikto jwt_tool
+testssl.sh wfuzz arjun` (web), `binwalk unblob firmwalker squashfs-tools`
+(firmware), `jadx apktool androguard apkleaks mobsfscan` (mobile). If a tool is
+missing (image not backing this sandbox), `command -v <tool>` first and fall
+back to a curl/bash equivalent, noting the degraded path. Tool-backed recipes
+live in `sentinel-payloads`. Examples:
+- `SENTINEL_GRANT=<t> sqlmap -u "<url>" --data="<params>" --batch --level=2 --risk=2 --output-dir=artifacts/sqlmap`
+- `SENTINEL_GRANT=<t> nuclei -u <url> -severity low,medium,high,critical -rl 20 -o artifacts/nuclei.txt`
 All outputs are evidence artifacts. Cite them in the report; never paste raw dumps into chat.
 
 ## Wrap-up rule (MANDATORY - prevents mid-run stalls)
@@ -130,6 +134,12 @@ When assessment phases complete, produce the FINAL ranked DRAFT report as a
 PURE-TEXT final answer with ZERO further tool calls. Pull numbers from memory
 of this conversation; reference artifact paths for raw evidence. Do not call
 tools to "double-check" during the wrap-up message.
+
+**Exception — challenge-clearing missions:** when following `sentinel-challenges`
+(clear every level/challenge, not sample), the wrap-up rule YIELDS while any
+`todo` remains in `artifacts/<host>.challenges.jsonl`. Keep looping through
+challenges; only emit the final pure-text report once the list has no `todo`
+(or the operator budget is hit).
 
 ## Handoff
 

