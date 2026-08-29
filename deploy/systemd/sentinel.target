@@ -1,0 +1,19 @@
+# Groups all three Sentinel services for one-command start/stop:
+#   systemctl start sentinel.target   # brings up guard, harness, console
+#   systemctl stop sentinel.target    # stops all three
+#   systemctl status sentinel.target  # rolled-up status
+#
+# Install alongside the three .service files in /etc/systemd/system/, then
+# `systemctl daemon-reload && systemctl enable --now sentinel.target`.
+# (enabling the target does not require separately enabling each .service —
+# their PartOf=sentinel.target + this target's Wants= is enough for start/stop
+# propagation; WantedBy=multi-user.target on each unit still governs boot-time
+# autostart independently, which is intentional — each survives a reboot on
+# its own even if you never touch the target directly.)
+
+[Unit]
+Description=Sentinel (scope-guard + harness + console)
+Wants=sentinel-guard.service sentinel-harness.service sentinel-console.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+# Sentinel TrueForge harness — the mission-driving agent API.
+# Stays loopback-only in this deployment (HOST env unset, defaults to
+# "localhost" — do NOT set HOST wider). The console (:8792) is the intended
+# public surface, proxying to this over loopback.
+#
+# Install: copy to /etc/systemd/system/, replace __SENTINEL_HOME__ with the
+# absolute repo path (e.g. /home/sentinel/sentinel), then
+# `systemctl daemon-reload && systemctl enable --now sentinel-harness`.
+
+[Unit]
+Description=Sentinel TrueForge harness (agent API, loopback only)
+After=network-online.target
+Wants=network-online.target
+PartOf=sentinel.target
+
+[Service]
+Type=simple
+User=sentinel
+Group=sentinel
+WorkingDirectory=__SENTINEL_HOME__
+EnvironmentFile=__SENTINEL_HOME__/.env
+ExecStart=__SENTINEL_HOME__/node_modules/.bin/trueforge --port 8790
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

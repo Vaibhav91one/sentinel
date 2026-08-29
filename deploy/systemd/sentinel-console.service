@@ -1,0 +1,32 @@
+# Sentinel console web UI — the ONLY service meant to be reachable off-box
+# (via the Cloudflare Tunnel, see deploy/cloudflared/config.yml). Binds
+# 127.0.0.1:8792 in code (not configurable) — the tunnel forwards to it over
+# loopback, no inbound port is ever opened on this VM.
+#
+# Requires CONSOLE_TOKEN and GUARD_TOKEN set in .env (see deploy/.env.example)
+# — without them the console runs in open/dev mode, no login gate.
+#
+# Install: copy to /etc/systemd/system/, replace __SENTINEL_HOME__ with the
+# absolute repo path (e.g. /home/sentinel/sentinel), then
+# `systemctl daemon-reload && systemctl enable --now sentinel-console`.
+
+[Unit]
+Description=Sentinel console (web UI, loopback only — tunnel-fronted)
+After=network-online.target sentinel-harness.service sentinel-guard.service
+Wants=network-online.target
+PartOf=sentinel.target
+
+[Service]
+Type=simple
+User=sentinel
+Group=sentinel
+WorkingDirectory=__SENTINEL_HOME__
+EnvironmentFile=__SENTINEL_HOME__/.env
+ExecStart=/usr/bin/node __SENTINEL_HOME__/console/serve.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

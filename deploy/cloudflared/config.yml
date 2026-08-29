@@ -1,0 +1,25 @@
+# Cloudflare Tunnel config — routes ONLY the console (127.0.0.1:8792)
+# publicly. Outbound-only: cloudflared dials out to Cloudflare's edge, so no
+# inbound port is ever opened on this VM's firewall/VPC. Never add an ingress
+# rule for :8790 (harness) or :9930 (scope-guard) — both must stay loopback-
+# only, reachable only from processes on this same VM.
+#
+# Setup (see docs/DEPLOY.md step 8):
+#   cloudflared tunnel login
+#   cloudflared tunnel create sentinel-console      # prints <tunnel-id>,
+#                                                    # writes the credentials
+#                                                    # file below
+#   # replace the two __PLACEHOLDER__ values below with real values
+#   cloudflared tunnel route dns sentinel-console <your-hostname>
+#   sudo cloudflared service install
+#
+# This file is a template — fill in real values on the VM, do not commit
+# real tunnel IDs/hostnames back to the repo.
+
+tunnel: __TUNNEL_ID__
+credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
+
+ingress:
+  - hostname: __YOUR_HOSTNAME__
+    service: http://127.0.0.1:8792
+  - service: http_status:404

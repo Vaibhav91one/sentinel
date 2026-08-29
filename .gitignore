@@ -2,6 +2,10 @@ node_modules/
 dist/
 .env
 .env.*
+# .env.* above is meant to ignore real secret files (.env.local etc.) but
+# also swept up template files like .env.example — un-ignore those.
+!.env.example
+!**/.env.example
 *.log
 .DS_Store
 data/scope.json

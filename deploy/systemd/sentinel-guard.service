@@ -1,0 +1,33 @@
+# Sentinel scope-guard MCP server — the enforcement boundary.
+# MUST stay loopback-only (binds 127.0.0.1:9930 in code, not configurable) —
+# never front this with the Cloudflare Tunnel or an open firewall port.
+#
+# WorkingDirectory MUST be the repo root: scope.ts/audit.ts resolve
+# data/scope.json and data/audit.jsonl relative to process.cwd(). Getting
+# this wrong silently creates an empty second data/ dir elsewhere — the
+# service "works" but the audit trail and allowlist are invisible.
+#
+# Install: copy to /etc/systemd/system/, replace __SENTINEL_HOME__ with the
+# absolute repo path (e.g. /home/sentinel/sentinel), then
+# `systemctl daemon-reload && systemctl enable --now sentinel-guard`.
+
+[Unit]
+Description=Sentinel scope-guard (MCP enforcement server, loopback only)
+After=network-online.target
+Wants=network-online.target
+PartOf=sentinel.target
+
+[Service]
+Type=simple
+User=sentinel
+Group=sentinel
+WorkingDirectory=__SENTINEL_HOME__
+EnvironmentFile=__SENTINEL_HOME__/.env
+ExecStart=/usr/bin/node __SENTINEL_HOME__/mcp/scope-guard/dist/index.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

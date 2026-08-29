@@ -21,7 +21,8 @@
     "harness": "trueforge --port 8790",
     "build": "pnpm -r build",
     "scope-guard": "node mcp/scope-guard/dist/index.js",
-    "scope-guard:dev": "tsx mcp/scope-guard/src/index.ts"
+    "scope-guard:dev": "tsx mcp/scope-guard/src/index.ts",
+    "console": "node console/serve.mjs"
   },
   "pnpm": {
     "overrides": {
